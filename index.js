@@ -1,39 +1,42 @@
-require('dotenv').config()
-const express = require('express')
-const axios = require('axios')
+const express = require('express');
+const axios   = require('axios');
+const app     = express();
 
-const app = express()
-app.use(express.json({ type: '*/*' }))
+app.use(express.json());
+app.use(express.text({ type: '*/*' }));
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID
-const PORT = process.env.PORT || 3000
-
-async function sendTelegram(message) {
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`
-    await axios.post(url, {
-        chat_id: TELEGRAM_CHAT_ID,
-        text: message,
-        parse_mode: 'Markdown'
-    })
-}
+const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 app.post('/webhook', async (req, res) => {
-    try {
-        const body = req.body
-        const message = body.message || JSON.stringify(body)
-        await sendTelegram(message)
-        res.status(200).json({ status: 'ok' })
-    } catch (error) {
-        console.error('Erro ao enviar mensagem:', error.message)
-        res.status(500).json({ status: 'error', message: error.message })
+  try {
+    let message = '';
+
+    if (typeof req.body === 'object' && req.body.message) {
+      message = req.body.message;
+    } else if (typeof req.body === 'string' && req.body.trim() !== '') {
+      message = req.body;
+    } else {
+      console.log('Body recebido:', req.body);
+      return res.status(400).json({ error: 'Mensagem vazia ou formato inválido' });
     }
-})
 
-app.get('/', (req, res) => {
-    res.send('Bot de alertas rodando!')
-})
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      chat_id:    TELEGRAM_CHAT_ID,
+      text:       message,
+      parse_mode: 'Markdown'
+    });
 
-app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`)
-})
+    console.log('✅ Mensagem enviada:', message.substring(0, 60) + '...');
+    res.status(200).json({ ok: true });
+
+  } catch (err) {
+    console.error('❌ Erro:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/', (req, res) => res.send('Bot activo ✅'));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
