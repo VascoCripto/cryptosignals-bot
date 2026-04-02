@@ -39,8 +39,14 @@ async function request(method, path, params = {}) {
         config.data = params;
     }
 
-    const res = await axios(config);
-    return res.data;
+    try {
+        const res = await axios(config);
+        return res.data;
+    } catch (err) {
+        const detail = err.response?.data || err.message;
+        console.error('[BOT] Erro na requisição:', JSON.stringify(detail));
+        throw new Error(JSON.stringify(detail));
+    }
 }
 
 async function getContractDetail(symbol) {
