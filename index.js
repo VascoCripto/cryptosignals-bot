@@ -10,7 +10,7 @@ app.use(express.text({ type: '*/*' }));
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// ─── Rota Telegram (não alterada) ─────────────────────────────────────────────
+// ─── Rota Telegram ────────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
     try {
         let message = '';
@@ -62,6 +62,16 @@ app.get('/bot-status', async (req, res) => {
         balanceUSDT:   balance,
         openPositions: positions,
     });
+});
+
+// ─── IP do servidor ───────────────────────────────────────────────────────────
+app.get('/meu-ip', async (req, res) => {
+    try {
+        const r = await axios.get('https://api.ipify.org?format=json');
+        res.json(r.data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ─── Health check ─────────────────────────────────────────────────────────────
