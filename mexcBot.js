@@ -9,7 +9,7 @@ function sign(timestamp, method, requestPath, body, secret) {
 }
 
 function toSymbol(symbol) {
-    return symbol.replace('_', '') + 'USDT';
+    return symbol.replace('_USDT', '').replace('_', '') + 'USDT';
 }
 
 async function request(method, path, params = {}) {
@@ -81,7 +81,10 @@ async function getBalance() {
 
 async function getOpenPositions() {
     try {
-        const res = await request('GET', '/api/v2/mix/position/all-position', { productType: 'USDT-FUTURES', marginCoin: 'USDT' });
+        const res = await request('GET', '/api/v2/mix/position/all-position', {
+            productType: 'USDT-FUTURES',
+            marginCoin:  'USDT'
+        });
         return res.data || [];
     } catch (err) {
         console.error('[BOT] Erro ao buscar posições:', err.message);
