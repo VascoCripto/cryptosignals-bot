@@ -132,8 +132,9 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
 async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
     try {
+        const normalizedSymbol = symbol.replace('_', '');
         const side   = action === 'buy' ? 'buy' : 'sell';
-        const result = await placeOrder({ symbol, side, price, stopLoss, takeProfit });
+        const result = await placeOrder({ symbol: normalizedSymbol, side, price, stopLoss, takeProfit });
         return { status: 'ok', data: result };
     } catch (err) {
         console.log('[BOT] Erro inesperado:', err.message);
