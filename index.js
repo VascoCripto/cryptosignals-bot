@@ -93,14 +93,17 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         const holdSide = action === 'buy' ? 'long' : 'short';
 
         // --- 1. FORÇA A ALAVANCAGEM PARA 10X ---
-        await setLeverage(symbol, 10, holdSide);
+        const alavancagem = 10;
+        await setLeverage(symbol, alavancagem, holdSide);
 
-        // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
-        const tamanhoEmDolares = 10; // Valor fixado em 10 dólares
-        let size = (tamanhoEmDolares / price).toFixed(2); 
+        // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM (MARGEM REAL) ---
+        const margemDesejada = 5; // Valor do SEU SALDO que será usado na operação (5 dólares)
+        const tamanhoTotalDaPosicao = margemDesejada * alavancagem; // 5 * 10 = 50 dólares de posição
+
+        let size = (tamanhoTotalDaPosicao / price).toFixed(2); 
 
         if (symbol.includes('BTC')) {
-            size = (tamanhoEmDolares / price).toFixed(4);
+            size = (tamanhoTotalDaPosicao / price).toFixed(4);
         }
 
         // --- 3. ORDEM PRINCIPAL COM TP E SL EMBUTIDOS ---
