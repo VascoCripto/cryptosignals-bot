@@ -16,7 +16,7 @@ const bot = new TelegramBot(telegramToken, { polling: false });
 // Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
-const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE; // Lendo corretamente do Railway
+const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
 const bitgetApiUrl = 'https://api.bitget.com';
 
 // Função para gerar a assinatura (HMAC SHA256)
@@ -82,7 +82,6 @@ const setLeverage = async (symbol, leverage, holdSide) => {
         });
         console.log('[BOT] Alavancagem configurada com sucesso!');
     } catch (error) {
-        // Apenas avisa no log, não trava o bot se a alavancagem já estiver em 10x
         console.log('[BOT] Aviso ao configurar alavancagem (pode já estar em 10x):', error.message);
     }
 };
@@ -104,6 +103,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size = (tamanhoEmDolares / price).toFixed(4);
         }
 
+        // --- 3. ORDEM PRINCIPAL COM TP E SL EMBUTIDOS ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -112,31 +112,14 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size: size,
             side: side,
             tradeSide: 'open',
-            orderType: 'market' 
+            orderType: 'market',
+            presetTakeProfitPrice: takeProfit.toString(),
+            presetStopLossPrice: stopLoss.toString()
         };
 
-        console.log('[BOT] Tentando colocar ordem principal:', orderData);
+        console.log('[BOT] Tentando colocar ordem principal com TP/SL:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         console.log('[BOT] Ordem principal enviada:', response);
-
-        // Se a ordem principal abriu com sucesso, envia o Stop Loss e Take Profit
-        if (response && response.code === '00000') {
-            try {
-                await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
-                    symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', planType: 'loss_plan',
-                    triggerPrice: stopLoss.toString(), triggerType: 'mark_price', executePrice: '0', holdSide: holdSide, size: size
-                });
-                console.log('[BOT] Stop Loss configurado:', stopLoss);
-            } catch (e) { console.log('[BOT] Erro ao colocar SL:', e.message); }
-
-            try {
-                await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
-                    symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', planType: 'profit_plan',
-                    triggerPrice: takeProfit.toString(), triggerType: 'mark_price', executePrice: '0', holdSide: holdSide, size: size
-                });
-                console.log('[BOT] Take Profit configurado:', takeProfit);
-            } catch (e) { console.log('[BOT] Erro ao colocar TP:', e.message); }
-        }
 
         return response;
     } catch (error) {
