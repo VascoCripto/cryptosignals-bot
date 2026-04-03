@@ -1,42 +1,51 @@
 const axios  = require('axios');
 const crypto = require('crypto');
 
-const BASE_URL = 'https://contract.mexc.com';
+const BASE_URL = 'https://api.bitget.com';
 
-function sign(apiKey, timestamp, paramsStr, secret) {
-    const signStr = apiKey + timestamp + paramsStr;
-    return crypto.createHmac('sha256', secret).update(signStr).digest('hex');
+function sign(timestamp, method, requestPath, body, secret) {
+    const message = timestamp + method.toUpperCase() + requestPath + (body || '');
+    return crypto.createHmac('sha256', secret).update(message).digest('base64');
+}
+
+function toSymbol(symbol) {
+    // converte BTC_USDT → BTCUSDT_UMCBL
+    return symbol.replace('_', '') + '_UMCBL';
 }
 
 async function request(method, path, params = {}) {
-    const apiKey    = process.env.MEXC_API_KEY;
-    const apiSecret = process.env.MEXC_API_SECRET;
-    const timestamp = Date.now().toString();
+    const apiKey      = process.env.BITGET_API_KEY;
+    const apiSecret   = process.env.BITGET_API_SECRET;
+    const passphrase  = process.env.BITGET_PASSPHRASE;
+    const timestamp   = Date.now().toString();
 
-    let paramsStr = '';
-    if (method === 'GET') {
-        paramsStr = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&');
-    } else {
-        paramsStr = JSON.stringify(params);
+    let requestPath = path;
+    let body = '';
+
+    if (method === 'GET' && Object.keys(params).length > 0) {
+        const qs = new URLSearchParams(params).toString();
+        requestPath = path + '?' + qs;
+    } else if (method === 'POST') {
+        body = JSON.stringify(params);
     }
 
-    const signature = sign(apiKey, timestamp, paramsStr, apiSecret);
+    const signature = sign(timestamp, method, requestPath, body, apiSecret);
 
     const config = {
         method,
-        url: BASE_URL + path,
+        url: BASE_URL + requestPath,
         headers: {
-            'ApiKey':       apiKey,
-            'Request-Time': timestamp,
-            'Signature':    signature,
-            'Content-Type': 'application/json'
+            'ACCESS-KEY':        apiKey,
+            'ACCESS-SIGN':       signature,
+            'ACCESS-TIMESTAMP':  timestamp,
+            'ACCESS-PASSPHRASE': passphrase,
+            'Content-Type':      'application/json',
+            'locale':            'en-US'
         }
     };
 
-    if (method === 'GET') {
-        config.params = params;
-    } else {
-        config.data = params;
+    if (method === 'POST') {
+        config.data = body;
     }
 
     try {
@@ -49,30 +58,21 @@ async function request(method, path, params = {}) {
     }
 }
 
-async function getContractDetail(symbol) {
-    try {
-        const res = await axios.get(`${BASE_URL}/api/v1/contract/detail`, { params: { symbol } });
-        return res.data?.data || null;
-    } catch (err) {
-        console.error('[BOT] Erro ao buscar detalhes do contrato:', err.message);
-        return null;
-    }
-}
-
-async function setLeverage(symbol, leverage) {
-    return request('POST', '/api/v1/private/position/change_leverage', {
+async function setLeverage(symbol, leverage, holdSide) {
+    return request('POST', '/api/mix/v1/account/setLeverage', {
         symbol,
-        leverage,
-        openType: 1
+        marginCoin: 'USDT',
+        leverage:   String(leverage),
+        holdSide
     });
 }
 
 async function getBalance() {
     try {
-        const res = await request('GET', '/api/v1/private/account/assets', {});
-        const usdt = res.data?.find(a => a.currency === 'USDT');
+        const res = await request('GET', '/api/mix/v1/account/accounts', { productType: 'umcbl' });
+        const usdt = res.data?.find(a => a.marginCoin === 'USDT');
         console.log('[BOT] Saldo encontrado:', usdt);
-        return usdt ? parseFloat(usdt.availableBalance) : 0;
+        return usdt ? parseFloat(usdt.available) : 0;
     } catch (err) {
         console.error('[BOT] Erro ao buscar saldo:', err.message);
         return 0;
@@ -81,7 +81,7 @@ async function getBalance() {
 
 async function getOpenPositions() {
     try {
-        const res = await request('GET', '/api/v1/private/position/open_positions', {});
+        const res = await request('GET', '/api/mix/v1/position/allPosition', { productType: 'umcbl' });
         return res.data || [];
     } catch (err) {
         console.error('[BOT] Erro ao buscar posições:', err.message);
@@ -90,32 +90,29 @@ async function getOpenPositions() {
 }
 
 async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
-    const leverage = parseInt(process.env.LEVERAGE) || 5;
-    const capital  = parseFloat(process.env.CAPITAL_PER_TRADE) || 10;
+    const leverage   = parseInt(process.env.LEVERAGE) || 5;
+    const capital    = parseFloat(process.env.CAPITAL_PER_TRADE) || 10;
+    const holdSide   = side === 'open_long' ? 'long' : 'short';
 
-    await setLeverage(symbol, leverage);
+    await setLeverage(symbol, leverage, holdSide);
 
-    const balance = await getBalance();
-    const detail  = await getContractDetail(symbol);
-    const contractSize  = detail?.contractSize || 0.0001;
-    const contractValue = price * contractSize;
+    const balance  = await getBalance();
+    const useUSDT  = (balance * capital) / 100;
+    const size     = ((useUSDT * leverage) / price).toFixed(4);
 
-    const useUSDT = (balance * capital) / 100;
-    const vol     = Math.floor((useUSDT * leverage) / contractValue);
+    console.log(`[BOT] Saldo: ${balance} USDT | Margem: ${useUSDT} | Size: ${size}`);
 
-    console.log(`[BOT] Saldo: ${balance} USDT | Margem: ${useUSDT} | ContractSize: ${contractSize} | Vol: ${vol}`);
+    if (parseFloat(size) <= 0) throw new Error(`Size inválido — saldo: ${balance} USDT`);
 
-    if (vol < 1) throw new Error(`Volume menor que 1 — saldo: ${balance} USDT, valor/contrato: ${contractValue} USDT`);
-
-    return request('POST', '/api/v1/private/order/submit', {
+    return request('POST', '/api/mix/v1/order/placeOrder', {
         symbol,
+        marginCoin:             'USDT',
+        size,
         side,
-        orderType:       5,
-        openType:        1,
-        vol,
-        leverage,
-        stopLossPrice:   stopLoss,
-        takeProfitPrice: takeProfit
+        orderType:              'market',
+        presetTakeProfitPrice:  String(takeProfit),
+        presetStopLossPrice:    String(stopLoss),
+        leverage:               String(leverage)
     });
 }
 
@@ -128,14 +125,18 @@ async function handleSignal(body) {
 
     if (!symbol || !price) return { status: 'rejected', reason: 'dados incompletos' };
 
+    const bgSymbol = toSymbol(symbol);
+
     if (action === 'buy' || action === 'sell') {
         if (state.active) return { status: 'skipped', reason: 'já há posição aberta' };
 
-        const side = action === 'buy' ? 1 : 2;
-        const res  = await placeOrder({ symbol, side, price, stopLoss, takeProfit });
+        const side = action === 'buy' ? 'open_long' : 'open_short';
+        const res  = await placeOrder({ symbol: bgSymbol, side, price, stopLoss, takeProfit });
 
-        if (res.success) {
-            state = { active: true, symbol, side: action };
+        console.log('[BOT] Resposta Bitget:', JSON.stringify(res));
+
+        if (res.code === '00000') {
+            state = { active: true, symbol: bgSymbol, side: action };
             return { status: 'ok', order: res.data };
         }
         return { status: 'error', detail: res };
