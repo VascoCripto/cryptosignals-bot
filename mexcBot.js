@@ -47,6 +47,14 @@ function request(method, path, body = null) {
     });
 }
 
+async function hasOpenPosition() {
+    const res = await request('GET', '/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT');
+    const positions = res.data ?? [];
+    const open = positions.filter(p => parseFloat(p.total) > 0);
+    console.log('[BOT] Posições abertas:', open.length);
+    return open.length > 0;
+}
+
 async function getBalance() {
     const res = await request('GET', '/api/v2/mix/account/account?symbol=BTCUSDT&productType=USDT-FUTURES&marginCoin=USDT');
     console.log('[BOT] Saldo bruto:', JSON.stringify(res));
@@ -132,6 +140,12 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
 async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
     try {
+        const posicaoAberta = await hasOpenPosition();
+        if (posicaoAberta) {
+            console.log('[BOT] Já existe uma posição aberta. Sinal ignorado.');
+            return { status: 'ignorado', reason: 'posição já aberta' };
+        }
+
         const normalizedSymbol = symbol.replace('_', '');
         const side   = action === 'buy' ? 'buy' : 'sell';
         const result = await placeOrder({ symbol: normalizedSymbol, side, price, stopLoss, takeProfit });
