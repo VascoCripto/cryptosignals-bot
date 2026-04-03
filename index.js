@@ -28,8 +28,8 @@ function formatTimeframe(tf) {
 async function sendTelegram(text) {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         chat_id:    TELEGRAM_CHAT_ID,
-        text,
-        parse_mode: 'Markdown'
+        text:       text,
+        parse_mode: 'Markdown' // Usando Markdown para formatação
     });
 }
 
@@ -49,7 +49,7 @@ app.post('/webhook', async (req, res) => {
         console.log('✅ Mensagem enviada:', message.substring(0, 60) + '...');
         res.status(200).json({ ok: true });
     } catch (err) {
-        console.error('❌ Erro:', err.response?.data || err.message);
+        console.error('❌ Erro ao enviar Telegram:', err.response?.data || err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -61,7 +61,7 @@ app.post('/webhook-bot', async (req, res) => {
 
         // ── Sinal JSON de entrada (compra/venda) ──────────────────────────────
         if (body && typeof body === 'object' && body.action && body.symbol && body.price) {
-            console.log('[BOT] Sinal recebido:', JSON.stringify(body));
+            console.log('[BOT] Sinal de entrada JSON recebido:', JSON.stringify(body));
 
             const isLong   = body.action === 'buy';
             const emoji    = isLong ? '🟢' : '🔴';
@@ -90,11 +90,11 @@ app.post('/webhook-bot', async (req, res) => {
                 await sendTelegram(telegramMsg);
                 console.log('[BOT] Telegram de entrada enviado');
             } catch (tgErr) {
-                console.error('[BOT] Erro ao enviar Telegram:', tgErr.message);
+                console.error('[BOT] Erro ao enviar Telegram de entrada:', tgErr.message);
             }
 
             const result = await handleSignal(body);
-            console.log('[BOT] Resultado:', JSON.stringify(result));
+            console.log('[BOT] Resultado da ordem:', JSON.stringify(result));
             return res.json(result);
         }
 
@@ -104,25 +104,50 @@ app.post('/webhook-bot', async (req, res) => {
             : (body?.message ?? null);
 
         if (textoMensagem && textoMensagem.trim() !== '') {
-            console.log('[BOT] Mensagem de saída detectada, enviando ao Telegram...');
+            console.log('[BOT] Mensagem de saída em texto detectada, enviando ao Telegram...');
             try {
                 await sendTelegram(textoMensagem);
                 console.log('[BOT] Mensagem de saída enviada ao Telegram');
             } catch (tgErr) {
-                console.error('[BOT] Erro ao enviar saída ao Telegram:', tgErr.message);
+                console.error('[BOT] Erro ao enviar Telegram de saída:', tgErr.message);
             }
             return res.status(200).json({ ok: true, status: 'exit_message_sent' });
         }
 
-        console.log('[BOT] Payload ignorado:', JSON.stringify(body));
+        console.log('[BOT] Payload ignorado (formato desconhecido):', JSON.stringify(body));
         return res.status(200).json({ ok: true, status: 'ignored' });
 
     } catch (err) {
-        console.error('[BOT] Erro inesperado:', err.message);
+        console.error('[BOT] Erro inesperado na rota webhook-bot:', err.message);
         return res.status(500).json({ status: 'error', reason: err.message });
     }
 });
 
 // ─── Status do bot ────────────────────────────────────────────────────────────
-app.get('/bot
+app.get('/bot-status', async (req, res) => {
+    const [positions, balance] = await Promise.all([
+        getOpenPositions(),
+        getBalance(),
+    ]);
+    return res.json({
+        botState:      getState(),
+        balanceUSDT:   balance,
+        openPositions: positions,
+    });
+});
 
+// ─── IP do servidor ───────────────────────────────────────────────────────────
+app.get('/meu-ip', async (req, res) => {
+    try {
+        const r = await axios.get('https://api.ipify.org?format=json');
+        res.json(r.data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Health check ─────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.send('Bot activo ✅'));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
