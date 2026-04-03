@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -16,30 +17,28 @@ const bot = new TelegramBot(telegramToken, { polling: false });
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_API_PASSPHRASE;
-const bitgetApiUrl = 'https://api.bitget.com'; // Ou 'https://api.bitget.com' para produção
+const bitgetApiUrl = 'https://api.bitget.com';
 
 // Função para gerar a assinatura (HMAC SHA256)
 const generateSignature = (timestamp, method, requestPath, body = '') => {
     const message = timestamp + method + requestPath + body;
-    const crypto = require('crypto');
     return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
 };
 
 // Função para fazer requisições autenticadas à Bitget
-const bitgetRequest = async (method, endpoint, data = {}) => {
+const bitgetRequest = async (method, requestPath, data = {}) => {
     const timestamp = Date.now().toString();
-    const requestPath = `/api/v2/mix/account/${endpoint}`; // Ajuste o path conforme a API v2
     const body = method === 'GET' ? '' : JSON.stringify(data);
     const signature = generateSignature(timestamp, method, requestPath, body);
 
     try {
         const headers = {
             'Content-Type': 'application/json',
-            'X-BG-APIKEY': bitgetApiKey,
-            'X-BG-TIMESTAMP': timestamp,
-            'X-BG-SIGN': signature,
-            'X-BG-PASSPHRASE': bitgetApiPassphrase,
-            'X-BG-RETRY': 'false'
+            'ACCESS-KEY': bitgetApiKey,
+            'ACCESS-TIMESTAMP': timestamp,
+            'ACCESS-SIGN': signature,
+            'ACCESS-PASSPHRASE': bitgetApiPassphrase,
+            'locale': 'en-US'
         };
 
         const config = { method, url: `${bitgetApiUrl}${requestPath}`, headers };
@@ -48,7 +47,6 @@ const bitgetRequest = async (method, endpoint, data = {}) => {
         }
 
         const response = await axios(config);
-        console.log('[BOT] Resposta API:', response.data);
         return response.data;
     } catch (error) {
         console.error('[BOT] Erro na requisição Bitget API:', error.response ? error.response.data : error.message);
@@ -59,14 +57,10 @@ const bitgetRequest = async (method, endpoint, data = {}) => {
 // Função para verificar posições abertas
 const getOpenPositions = async (symbol) => {
     try {
-        // Ajuste o endpoint conforme a API v2 para obter posições
-        // Exemplo: /api/v2/mix/position/openPositions (verifique a documentação da Bitget v2)
-        const response = await bitgetRequest('GET', `position/allFills?symbol=${symbol}`); // Exemplo, ajuste para o endpoint correto de posições abertas
-        // A lógica aqui pode precisar ser ajustada dependendo da estrutura da resposta da API v2
-        // Você precisará iterar sobre 'data' e verificar se há posições ativas para o símbolo
+        const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
         if (response && response.data && response.data.length > 0) {
-            console.log(`[BOT] Posições abertas para ${symbol}:`, response.data.length);
-            return response.data.filter(pos => pos.symbol === symbol && pos.holdSide !== 'none').length > 0;
+            const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
+            return positions.length > 0;
         }
         return false;
     } catch (error) {
@@ -75,24 +69,63 @@ const getOpenPositions = async (symbol) => {
     }
 };
 
-// Função para enviar ordem (compra/venda)
-const placeOrder = async (symbol, side, price, stopLoss, takeProfit) => {
+// Função para enviar ordem (compra/venda) e configurar TP/SL
+const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
     try {
-        // Ajuste o endpoint e o payload conforme a API v2 para colocar ordens
+        const side = action === 'buy' ? 'buy' : 'sell';
+        const holdSide = action === 'buy' ? 'long' : 'short';
+        const size = '0.001'; // Ajuste o tamanho da ordem conforme sua banca
+
         const orderData = {
             symbol: symbol,
-            side: side, // 'buy' ou 'sell'
-            orderType: 'limit', // Ou 'market'
-            price: price.toString(),
-            size: '0.001', // Ajuste o tamanho da ordem conforme sua estratégia e par
+            productType: 'USDT-FUTURES',
+            marginMode: 'isolated',
             marginCoin: 'USDT',
-            tradeSide: side === 'buy' ? 'open_long' : 'open_short', // 'open_long' ou 'open_short'
-            timeInForce: 'gtc',
-            // stopLoss: stopLoss.toString(), // A Bitget pode exigir que SL/TP sejam ordens separadas ou em um formato específico
-            // takeProfit: takeProfit.toString()
+            size: size,
+            side: side,
+            tradeSide: 'open',
+            orderType: 'market' // Usando market para garantir que a ordem entre na hora
         };
-        console.log('[BOT] Tentando colocar ordem:', orderData);
-        const response = await bitgetRequest('POST', 'order/placeOrder', orderData); // Exemplo, ajuste para o endpoint correto
+
+        console.log('[BOT] Tentando colocar ordem principal:', orderData);
+        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        console.log('[BOT] Ordem principal enviada:', response);
+
+        // Se a ordem principal abriu com sucesso, envia o Stop Loss e Take Profit
+        if (response && response.code === '00000') {
+            // Configura Stop Loss
+            try {
+                await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
+                    symbol,
+                    productType: 'USDT-FUTURES',
+                    marginCoin: 'USDT',
+                    planType: 'loss_plan',
+                    triggerPrice: stopLoss.toString(),
+                    triggerType: 'mark_price',
+                    executePrice: '0',
+                    holdSide: holdSide,
+                    size: size
+                });
+                console.log('[BOT] Stop Loss configurado:', stopLoss);
+            } catch (e) { console.log('[BOT] Erro ao colocar SL:', e.message); }
+
+            // Configura Take Profit
+            try {
+                await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
+                    symbol,
+                    productType: 'USDT-FUTURES',
+                    marginCoin: 'USDT',
+                    planType: 'profit_plan',
+                    triggerPrice: takeProfit.toString(),
+                    triggerType: 'mark_price',
+                    executePrice: '0',
+                    holdSide: holdSide,
+                    size: size
+                });
+                console.log('[BOT] Take Profit configurado:', takeProfit);
+            } catch (e) { console.log('[BOT] Erro ao colocar TP:', e.message); }
+        }
+
         return response;
     } catch (error) {
         console.error('[BOT] Erro ao colocar ordem:', error.message);
@@ -109,19 +142,20 @@ const handleSignal = async (body) => {
 
         if (!action || !symbol || !price || !stopLoss || !takeProfit) {
             console.error('[BOT] Erro: Sinal JSON incompleto ou inválido.');
-            await bot.sendMessage(telegramChatId, `❌ Erro: Sinal JSON incompleto ou inválido recebido. Detalhes: ${JSON.stringify(body)}`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramChatId, `❌ Erro: Sinal JSON incompleto ou inválido recebido.`, { parse_mode: 'Markdown' });
             return;
         }
 
+        const normalizedSymbol = symbol.replace('_', '').toUpperCase();
         const tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
         const emoji = action === 'buy' ? '🟢' : '🔴';
-        const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${symbol.replace('USDT', '_USDT')}?type=futures`;
+        const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
         // Verifica se já existe uma posição aberta para o símbolo
-        const hasOpenPosition = await getOpenPositions(symbol);
+        const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Sinal ignorado.');
-            await bot.sendMessage(telegramChatId, `⚠️ *Sinal Ignorado:* Já existe uma posição aberta para ${symbol}.`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramChatId, `⚠️ *Sinal Ignorado:* Já existe uma posição aberta para ${normalizedSymbol}.`, { parse_mode: 'Markdown' });
             return;
         }
 
@@ -129,7 +163,7 @@ const handleSignal = async (body) => {
         const telegramMsg =
             `${emoji} *SINAL DE ${tipo}*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
-            `📌 *Par:* ${symbol}\n` +
+            `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
             `⚙️ *Alavancagem:* 5x a 10x\n\n` +
             `💰 *Entrada:* \`${price}\`\n` +
@@ -138,18 +172,17 @@ const handleSignal = async (body) => {
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📊 *Placar Geral:* ${wins}W - ${losses}L (${winRate}%)\n` +
             `🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `_Sinal gerado por IA_`;
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `_Sinal gerado por IA_`;
 
         await bot.sendMessage(telegramChatId, telegramMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         console.log('[BOT] Telegram de entrada enviado');
 
         // Coloca a ordem na Bitget
-        const orderSide = action === 'buy' ? 'open_long' : 'open_short'; // Ajuste conforme a Bitget API v2
-        const orderResult = await placeOrder(symbol, orderSide, price, stopLoss, takeProfit);
+        const orderResult = await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit);
         console.log('[BOT] Resultado da ordem:', orderResult);
 
-        await bot.sendMessage(telegramChatId, `✅ Ordem de ${tipo} para ${symbol} enviada com sucesso!`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(telegramChatId, `✅ Ordem de ${tipo} para ${normalizedSymbol} enviada com sucesso!`, { parse_mode: 'Markdown' });
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
@@ -161,10 +194,9 @@ const handleSignal = async (body) => {
 app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
-        // console.log('[WEBHOOK] Requisição recebida:', JSON.stringify(body)); // Log mais detalhado da requisição bruta
 
         // Verifica se é um sinal de saída (TP/SL atingido)
-        if (body.result_icon && body.placar_str) { // Adapte esta condição para o formato do seu alerta de saída
+        if (body.result_icon && body.placar_str) {
             console.log('[BOT] Mensagem de saída detectada, enviando ao Telegram...');
             const exitMsg = body.result_icon + "\n" +
                             "━━━━━━━━━━━━━━━━━━━━\n" +
@@ -173,11 +205,10 @@ app.post('/webhook-bot', async (req, res) => {
                             "🔄 *Operação:* "   + body.trade_dir + "\n" +
                             "💰 *Entrada:* `"   + body.entry_price + "`\n" +
                             "🏁 *Saída:* `"     + body.exit_price + "`\n" +
-                            "💵 *Resultado:* "  + body.result_text + "\n" + // Assumindo que você adicionou result_text no alerta de saída
+                            "💵 *Resultado:* "  + body.result_text + "\n" +
                             "━━━━━━━━━━━━━━━━━━━━" + body.placar_str;
 
             await bot.sendMessage(telegramChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-            console.log('[BOT] Mensagem de saída enviada ao Telegram');
         } else {
             // Se não for um sinal de saída, trata como sinal de entrada
             await handleSignal(body);
