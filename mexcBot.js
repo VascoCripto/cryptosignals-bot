@@ -150,7 +150,6 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
 async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
     try {
-        // Validação dos campos obrigatórios
         if (!action || !symbol || !price) {
             console.log('[BOT] Payload inválido, campos faltando:', { action, symbol, price });
             return { status: 'ignorado', reason: 'payload inválido' };
@@ -166,13 +165,14 @@ async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
 
         botState = 'trading';
         const normalizedSymbol = symbol.replace('_', '').toUpperCase();
-        const side   = action === 'buy' ? 'buy' : 'sell';
+        const side = action === 'buy' ? 'buy' : 'sell';
+
         const result = await placeOrder({
-            symbol: normalizedSymbol,
+            symbol:     normalizedSymbol,
             side,
-            price:       parseFloat(price),
-            stopLoss:    parseFloat(stopLoss),
-            takeProfit:  parseFloat(takeProfit)
+            price:      parseFloat(price),
+            stopLoss:   parseFloat(stopLoss),
+            takeProfit: parseFloat(takeProfit)
         });
 
         botState = 'idle';

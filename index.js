@@ -41,33 +41,46 @@ app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
 
-        // Se for JSON com os campos esperados → executa a ordem
         if (body && body.action && body.symbol && body.price) {
             console.log('[BOT] Sinal recebido:', JSON.stringify(body));
+
+            // Monta e envia mensagem no Telegram
+            const isLong   = body.action === 'buy';
+            const emoji    = isLong ? '🟢' : '🔴';
+            const tipo     = isLong ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
+            const pairName = body.symbol.replace('USDT', '');
+
+            const telegramMsg =
+                `${emoji} *SINAL DE ${tipo}*\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `📌 *Par:* ${body.symbol}\n` +
+                `⚙️ *Alavancagem:* 5x a 10x\n\n` +
+                `💰 *Entrada:* \`${body.price}\`\n\n` +
+                `🎯 *Take Profit:* \`${body.takeProfit}\` (+${body.tpPct}%)\n` +
+                `🛑 *Stop Loss:* \`${body.stopLoss}\` (-${body.slPct}%)\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `🔗 Operar na Bitget: [Clique aqui](https://www.bitget.com/futures/usdt/${pairName}USDT?inviteCode=KDY8LN6G)`;
+
+            try {
+                await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+                    chat_id:    TELEGRAM_CHAT_ID,
+                    text:       telegramMsg,
+                    parse_mode: 'Markdown'
+                });
+                console.log('[BOT] Telegram enviado com sucesso');
+            } catch (tgErr) {
+                console.error('[BOT] Erro ao enviar Telegram:', tgErr.message);
+            }
+
+            // Executa ordem na Bitget
             const result = await handleSignal(body);
             console.log('[BOT] Resultado:', JSON.stringify(result));
             return res.json(result);
         }
 
-        // Caso contrário → é mensagem formatada, encaminha pro Telegram
-        let message = '';
-        if (typeof body === 'string' && body.trim() !== '') {
-            message = body;
-        } else if (body && body.message) {
-            message = body.message;
-        } else {
-            console.log('[BOT] Payload ignorado (sem campos válidos):', body);
-            return res.status(200).json({ ok: true, status: 'ignored' });
-        }
-
-        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-            chat_id:    TELEGRAM_CHAT_ID,
-            text:       message,
-            parse_mode: 'Markdown'
-        });
-
-        console.log('✅ Mensagem Telegram enviada:', message.substring(0, 60) + '...');
-        return res.status(200).json({ ok: true });
+        // Payload sem campos válidos — ignora
+        console.log('[BOT] Payload ignorado:', JSON.stringify(body));
+        return res.status(200).json({ ok: true, status: 'ignored' });
 
     } catch (err) {
         console.error('[BOT] Erro inesperado:', err.message);
