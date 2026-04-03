@@ -16,7 +16,7 @@ const bot = new TelegramBot(telegramToken, { polling: false });
 // Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
-const bitgetApiPassphrase = process.env.BITGET_API_PASSPHRASE;
+const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE; // <-- CORRIGIDO AQUI (Tiramos o _API_)
 const bitgetApiUrl = 'https://api.bitget.com';
 
 // Função para gerar a assinatura (HMAC SHA256)
