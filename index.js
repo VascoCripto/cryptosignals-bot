@@ -10,23 +10,22 @@ app.use(express.text({ type: '*/*' }));
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// ─── Formata o timeframe para exibição ───────────────────────────────────────
 function formatTimeframe(tf) {
     if (!tf) return '—';
-    if (tf === '1') return '1min';
-    if (tf === '3') return '3min';
-    if (tf === '5') return '5min';
-    if (tf === '15') return '15min';
-    if (tf === '30') return '30min';
-    if (tf === '60') return '1h';
-    if (tf === '120') return '2h';
-    if (tf === '240') return '4h';
+    if (tf === '1')           return '1min';
+    if (tf === '3')           return '3min';
+    if (tf === '5')           return '5min';
+    if (tf === '15')          return '15min';
+    if (tf === '30')          return '30min';
+    if (tf === '60')          return '1h';
+    if (tf === '120')         return '2h';
+    if (tf === '240')         return '4h';
     if (tf === 'D' || tf === '1D') return '1 Dia';
-    if (tf === 'W') return '1 Semana';
+    if (tf === 'W')           return '1 Semana';
     return tf;
 }
 
-// ─── Rota Telegram (mensagens diretas) ───────────────────────────────────────
+// ─── Rota Telegram (mensagens diretas de saída) ───────────────────────────────
 app.post('/webhook', async (req, res) => {
     try {
         let message = '';
@@ -52,7 +51,7 @@ app.post('/webhook', async (req, res) => {
     }
 });
 
-// ─── Rota Bot Bitget ──────────────────────────────────────────────────────────
+// ─── Rota Bot Bitget (sinais do TradingView) ──────────────────────────────────
 app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
@@ -94,7 +93,6 @@ app.post('/webhook-bot', async (req, res) => {
                 console.error('[BOT] Erro ao enviar Telegram:', tgErr.message);
             }
 
-            // Executa ordem na Bitget
             const result = await handleSignal(body);
             console.log('[BOT] Resultado:', JSON.stringify(result));
             return res.json(result);
