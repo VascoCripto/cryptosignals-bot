@@ -1,161 +1,201 @@
 const express = require('express');
-const axios   = require('axios');
-const app     = express();
+const bodyParser = require('body-parser');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+require('dotenv').config();
 
-const { handleSignal, getState, getOpenPositions, getBalance } = require('./mexcBot');
+const app = express();
+app.use(bodyParser.json());
 
-app.use(express.json());
-app.use(express.text({ type: '*/*' }));
+// Configurações do Telegram
+const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+const bot = new TelegramBot(telegramToken, { polling: false });
 
-const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// Configurações da Bitget
+const bitgetApiKey = process.env.BITGET_API_KEY;
+const bitgetApiSecret = process.env.BITGET_API_SECRET;
+const bitgetApiPassphrase = process.env.BITGET_API_PASSPHRASE;
+const bitgetApiUrl = 'https://api.bitget.com'; // Ou 'https://api.bitget.com' para produção
 
-async function sendTelegram(text) {
-    await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-        chat_id:    TELEGRAM_CHAT_ID,
-        text:       text,
-        parse_mode: 'Markdown'
-    });
-}
+// Função para gerar a assinatura (HMAC SHA256)
+const generateSignature = (timestamp, method, requestPath, body = '') => {
+    const message = timestamp + method + requestPath + body;
+    const crypto = require('crypto');
+    return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
+};
 
-function formatTimeframe(tf) {
-    if (!tf) return '—';
-    if (tf === '1')           return '1min';
-    if (tf === '3')           return '3min';
-    if (tf === '5')           return '5min';
-    if (tf === '15')          return '15min';
-    if (tf === '30')          return '30min';
-    if (tf === '60')          return '1h';
-    if (tf === '120')         return '2h';
-    if (tf === '240')         return '4h';
-    if (tf === '360')         return '6h';
-    if (tf === '480')         return '8h';
-    if (tf === '720')         return '12h';
-    if (tf === 'D' || tf === '1D') return '1D';
-    if (tf === 'W' || tf === '1W') return '1W';
-    if (tf === 'M' || tf === '1M') return '1M';
-    return tf;
-}
+// Função para fazer requisições autenticadas à Bitget
+const bitgetRequest = async (method, endpoint, data = {}) => {
+    const timestamp = Date.now().toString();
+    const requestPath = `/api/v2/mix/account/${endpoint}`; // Ajuste o path conforme a API v2
+    const body = method === 'GET' ? '' : JSON.stringify(data);
+    const signature = generateSignature(timestamp, method, requestPath, body);
 
-// ─── Rota Telegram (mensagens diretas) ───────────────────────────────────────
-app.post('/webhook', async (req, res) => {
     try {
-        let message = '';
-        if (typeof req.body === 'object' && req.body.message) {
-            message = req.body.message;
-        } else if (typeof req.body === 'string' && req.body.trim() !== '') {
-            message = req.body;
-        } else {
-            return res.status(400).json({ error: 'Mensagem vazia ou formato inválido' });
+        const headers = {
+            'Content-Type': 'application/json',
+            'X-BG-APIKEY': bitgetApiKey,
+            'X-BG-TIMESTAMP': timestamp,
+            'X-BG-SIGN': signature,
+            'X-BG-PASSPHRASE': bitgetApiPassphrase,
+            'X-BG-RETRY': 'false'
+        };
+
+        const config = { method, url: `${bitgetApiUrl}${requestPath}`, headers };
+        if (method !== 'GET') {
+            config.data = body;
         }
 
-        await sendTelegram(message);
-
-        console.log('✅ Mensagem enviada:', message.substring(0, 60) + '...');
-        res.status(200).json({ ok: true });
-    } catch (err) {
-        console.error('❌ Erro:', err.response?.data || err.message);
-        res.status(500).json({ error: err.message });
+        const response = await axios(config);
+        console.log('[BOT] Resposta API:', response.data);
+        return response.data;
+    } catch (error) {
+        console.error('[BOT] Erro na requisição Bitget API:', error.response ? error.response.data : error.message);
+        throw error;
     }
-});
+};
 
-// ─── Rota Bot Bitget ──────────────────────────────────────────────────────────
+// Função para verificar posições abertas
+const getOpenPositions = async (symbol) => {
+    try {
+        // Ajuste o endpoint conforme a API v2 para obter posições
+        // Exemplo: /api/v2/mix/position/openPositions (verifique a documentação da Bitget v2)
+        const response = await bitgetRequest('GET', `position/allFills?symbol=${symbol}`); // Exemplo, ajuste para o endpoint correto de posições abertas
+        // A lógica aqui pode precisar ser ajustada dependendo da estrutura da resposta da API v2
+        // Você precisará iterar sobre 'data' e verificar se há posições ativas para o símbolo
+        if (response && response.data && response.data.length > 0) {
+            console.log(`[BOT] Posições abertas para ${symbol}:`, response.data.length);
+            return response.data.filter(pos => pos.symbol === symbol && pos.holdSide !== 'none').length > 0;
+        }
+        return false;
+    } catch (error) {
+        console.error('[BOT] Erro ao verificar posições abertas:', error.message);
+        return false;
+    }
+};
+
+// Função para enviar ordem (compra/venda)
+const placeOrder = async (symbol, side, price, stopLoss, takeProfit) => {
+    try {
+        // Ajuste o endpoint e o payload conforme a API v2 para colocar ordens
+        const orderData = {
+            symbol: symbol,
+            side: side, // 'buy' ou 'sell'
+            orderType: 'limit', // Ou 'market'
+            price: price.toString(),
+            size: '0.001', // Ajuste o tamanho da ordem conforme sua estratégia e par
+            marginCoin: 'USDT',
+            tradeSide: side === 'buy' ? 'open_long' : 'open_short', // 'open_long' ou 'open_short'
+            timeInForce: 'gtc',
+            // stopLoss: stopLoss.toString(), // A Bitget pode exigir que SL/TP sejam ordens separadas ou em um formato específico
+            // takeProfit: takeProfit.toString()
+        };
+        console.log('[BOT] Tentando colocar ordem:', orderData);
+        const response = await bitgetRequest('POST', 'order/placeOrder', orderData); // Exemplo, ajuste para o endpoint correto
+        return response;
+    } catch (error) {
+        console.error('[BOT] Erro ao colocar ordem:', error.message);
+        throw error;
+    }
+};
+
+// Função principal para lidar com os sinais do TradingView
+const handleSignal = async (body) => {
+    try {
+        console.log('[BOT] Sinal de entrada JSON recebido:', JSON.stringify(body));
+
+        const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
+
+        if (!action || !symbol || !price || !stopLoss || !takeProfit) {
+            console.error('[BOT] Erro: Sinal JSON incompleto ou inválido.');
+            await bot.sendMessage(telegramChatId, `❌ Erro: Sinal JSON incompleto ou inválido recebido. Detalhes: ${JSON.stringify(body)}`, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        const tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
+        const emoji = action === 'buy' ? '🟢' : '🔴';
+        const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${symbol.replace('USDT', '_USDT')}?type=futures`;
+
+        // Verifica se já existe uma posição aberta para o símbolo
+        const hasOpenPosition = await getOpenPositions(symbol);
+        if (hasOpenPosition) {
+            console.log('[BOT] Já existe uma posição aberta. Sinal ignorado.');
+            await bot.sendMessage(telegramChatId, `⚠️ *Sinal Ignorado:* Já existe uma posição aberta para ${symbol}.`, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        // Envia a mensagem para o Telegram
+        const telegramMsg =
+            `${emoji} *SINAL DE ${tipo}*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📌 *Par:* ${symbol}\n` +
+            `⏱ *Timeframe:* ${timeframe}\n` +
+            `⚙️ *Alavancagem:* 5x a 10x\n\n` +
+            `💰 *Entrada:* \`${price}\`\n` +
+            `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
+            `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `📊 *Placar Geral:* ${wins}W - ${losses}L (${winRate}%)\n` +
+            `🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `_Sinal gerado por IA_`;
+
+        await bot.sendMessage(telegramChatId, telegramMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+        console.log('[BOT] Telegram de entrada enviado');
+
+        // Coloca a ordem na Bitget
+        const orderSide = action === 'buy' ? 'open_long' : 'open_short'; // Ajuste conforme a Bitget API v2
+        const orderResult = await placeOrder(symbol, orderSide, price, stopLoss, takeProfit);
+        console.log('[BOT] Resultado da ordem:', orderResult);
+
+        await bot.sendMessage(telegramChatId, `✅ Ordem de ${tipo} para ${symbol} enviada com sucesso!`, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        console.error('[BOT] Erro fatal ao processar sinal:', error.message);
+        await bot.sendMessage(telegramChatId, `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`, { parse_mode: 'Markdown' });
+    }
+};
+
+// Rota para o webhook do TradingView
 app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
+        // console.log('[WEBHOOK] Requisição recebida:', JSON.stringify(body)); // Log mais detalhado da requisição bruta
 
-        // ── Sinal de entrada JSON ─────────────────────────────────────────────
-        if (typeof body === 'object' && body.action && body.symbol && body.price) {
-            console.log('[BOT] Sinal de entrada JSON recebido:', JSON.stringify(body));
-
-            const tipo        = body.action === 'buy' ? 'COMPRA (LONG) 🟢' : 'VENDA (SHORT) 🔴';
-            const emoji       = body.action === 'buy' ? '🟢' : '🔴';
-            const pairName    = body.symbol.replace('_', '');
-
-            const tf          = body.timeframe ? formatTimeframe(body.timeframe) : '—';
-            const wins        = body.wins ?? '—';
-            const losses      = body.losses ?? '—';
-            const winRate     = (body.winRate !== undefined && body.winRate !== null) ? `${body.winRate.toFixed(1)}%` : '—';
-            const tpPct       = (body.tpPct !== undefined && body.tpPct !== null) ? `${body.tpPct.toFixed(1)}%` : '—';
-            const slPct       = (body.slPct !== undefined && body.slPct !== null) ? `${body.slPct.toFixed(1)}%` : '—';
-
-
-            const telegramMsg =
-                `${emoji} *SINAL DE ${tipo}*\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `📌 *Par:* ${body.symbol}\n` +
-                `⏱ *Timeframe:* ${tf}\n` +
-                `⚙️ *Alavancagem:* 5x a 10x\n\n` +
-                `💰 *Entrada:* \`${body.price}\`\n\n` +
-                `🎯 *Take Profit:* \`${body.takeProfit}\` (+${tpPct})\n` +
-                `🛑 *Stop Loss:* \`${body.stopLoss}\` (-${slPct})\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `📊 *Placar:* ${wins}W - ${losses}L (${winRate})\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `🔗 Operar na Bitget: [Clique aqui](https://www.bitget.com/futures/usdt/${pairName}USDT?inviteCode=KDY8LN6G)`;
-
-            try {
-                await sendTelegram(telegramMsg);
-                console.log('[BOT] Telegram de entrada enviado');
-            } catch (tgErr) {
-                console.error('[BOT] Erro ao enviar Telegram de entrada:', tgErr.message);
-            }
-
-            const result = await handleSignal(body);
-            console.log('[BOT] Resultado da ordem:', JSON.stringify(result));
-            return res.json(result);
-        }
-
-        // ── Mensagem de saída (TP/SL) em texto — encaminha pro Telegram ───────
-        const textoMensagem = typeof body === 'string'
-            ? body
-            : (body?.message ?? null);
-
-        if (textoMensagem && textoMensagem.trim() !== '') {
+        // Verifica se é um sinal de saída (TP/SL atingido)
+        if (body.result_icon && body.placar_str) { // Adapte esta condição para o formato do seu alerta de saída
             console.log('[BOT] Mensagem de saída detectada, enviando ao Telegram...');
-            try {
-                await sendTelegram(textoMensagem);
-                console.log('[BOT] Mensagem de saída enviada ao Telegram');
-            } catch (tgErr) {
-                console.error('[BOT] Erro ao enviar saída ao Telegram:', tgErr.message);
-            }
-            return res.status(200).json({ ok: true, status: 'exit_message_sent' });
+            const exitMsg = body.result_icon + "\n" +
+                            "━━━━━━━━━━━━━━━━━━━━\n" +
+                            "📌 *Par:* "        + body.pair_name + "\n" +
+                            "⏱ *Timeframe:* "  + body.timeframe + "\n" +
+                            "🔄 *Operação:* "   + body.trade_dir + "\n" +
+                            "💰 *Entrada:* `"   + body.entry_price + "`\n" +
+                            "🏁 *Saída:* `"     + body.exit_price + "`\n" +
+                            "💵 *Resultado:* "  + body.result_text + "\n" + // Assumindo que você adicionou result_text no alerta de saída
+                            "━━━━━━━━━━━━━━━━━━━━" + body.placar_str;
+
+            await bot.sendMessage(telegramChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+            console.log('[BOT] Mensagem de saída enviada ao Telegram');
+        } else {
+            // Se não for um sinal de saída, trata como sinal de entrada
+            await handleSignal(body);
         }
 
-        console.log('[BOT] Payload ignorado:', JSON.stringify(body));
-        return res.status(200).json({ ok: true, status: 'ignored' });
-
-    } catch (err) {
-        console.error('[BOT] Erro inesperado:', err.message);
-        return res.status(500).json({ status: 'error', reason: err.message });
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('[WEBHOOK] Erro no endpoint do webhook:', error.message);
+        res.status(500).send('Erro interno do servidor');
     }
 });
 
-// ─── Status do bot ────────────────────────────────────────────────────────────
-app.get('/bot-status', async (req, res) => {
-    const [positions, balance] = await Promise.all([
-        getOpenPositions(),
-        getBalance(),
-    ]);
-    return res.json({
-        botState:      getState(),
-        balanceUSDT:   balance,
-        openPositions: positions,
-    });
+// Rota de saúde para verificar se o bot está online
+app.get('/', (req, res) => {
+    res.status(200).send('Bot de sinais está online!');
 });
 
-// ─── IP do servidor ───────────────────────────────────────────────────────────
-app.get('/meu-ip', async (req, res) => {
-    try {
-        const r = await axios.get('https://api.ipify.org?format=json');
-        res.json(r.data);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+    console.log(`Servidor na porta ${PORT}`);
 });
-
-// ─── Health check ─────────────────────────────────────────────────────────────
-app.get('/', (req, res) => res.send('Bot activo ✅'));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
