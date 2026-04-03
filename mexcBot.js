@@ -1,43 +1,55 @@
 const crypto = require('crypto');
-const fetch  = require('node-fetch');
+const https  = require('https');
 
-const BASE_URL = 'https://api.bitget.com';
+const BASE_URL = 'api.bitget.com';
 
 function sign(timestamp, method, path, body) {
     const message = timestamp + method.toUpperCase() + path + (body ? JSON.stringify(body) : '');
-    return crypto.createHmac('sha256', process.env.BITGET_SECRET).update(message).digest('base64');
+    return crypto.createHmac('sha256', process.env.BITGET_API_SECRET).update(message).digest('base64');
 }
 
-async function request(method, path, body = null) {
-    const timestamp = Date.now().toString();
-    const signature = sign(timestamp, method, path, body);
+function request(method, path, body = null) {
+    return new Promise((resolve, reject) => {
+        const timestamp = Date.now().toString();
+        const signature = sign(timestamp, method, path, body);
 
-    const headers = {
-        'Content-Type':      'application/json',
-        'ACCESS-KEY':        process.env.BITGET_API_KEY,
-        'ACCESS-SIGN':       signature,
-        'ACCESS-TIMESTAMP':  timestamp,
-        'ACCESS-PASSPHRASE': process.env.BITGET_PASSPHRASE,
-        'locale':            'en-US'
-    };
+        const headers = {
+            'Content-Type':      'application/json',
+            'ACCESS-KEY':        process.env.BITGET_API_KEY,
+            'ACCESS-SIGN':       signature,
+            'ACCESS-TIMESTAMP':  timestamp,
+            'ACCESS-PASSPHRASE': process.env.BITGET_PASSPHRASE,
+            'locale':            'en-US'
+        };
 
-    const options = { method, headers };
-    if (body) options.body = JSON.stringify(body);
+        const payload = body ? JSON.stringify(body) : null;
+        if (payload) headers['Content-Length'] = Buffer.byteLength(payload);
 
-    const res  = await fetch(BASE_URL + path, options);
-    const data = await res.json();
+        const options = { hostname: BASE_URL, path, method, headers };
 
-    if (data.code && data.code !== '00000') {
-        console.log('[BOT] Erro na requisição:', JSON.stringify(data));
-        throw new Error(JSON.stringify(data));
-    }
+        const req = https.request(options, res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    console.log('[BOT] Resposta API:', JSON.stringify(parsed));
+                    resolve(parsed);
+                } catch (e) {
+                    reject(new Error('Resposta inválida: ' + data));
+                }
+            });
+        });
 
-    return data;
+        req.on('error', reject);
+        if (payload) req.write(payload);
+        req.end();
+    });
 }
 
 async function getBalance() {
     const res = await request('GET', '/api/v2/mix/account/account?symbol=BTCUSDT&productType=USDT-FUTURES&marginCoin=USDT');
-    console.log('[BOT] Resposta saldo:', JSON.stringify(res.data));
+    console.log('[BOT] Saldo bruto:', JSON.stringify(res));
     return parseFloat(res.data?.available ?? 0);
 }
 
@@ -79,7 +91,7 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
     console.log('[BOT] Ordem enviada:', JSON.stringify(order));
 
-    if (order.code === '00000' || order.data) {
+    if (order.data) {
         try {
             await request('POST', '/api/v2/mix/order/place-tpsl-order', {
                 symbol,
@@ -120,7 +132,7 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
 async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
     try {
-        const side = action === 'buy' ? 'buy' : 'sell';
+        const side   = action === 'buy' ? 'buy' : 'sell';
         const result = await placeOrder({ symbol, side, price, stopLoss, takeProfit });
         return { status: 'ok', data: result };
     } catch (err) {
