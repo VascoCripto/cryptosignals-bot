@@ -111,7 +111,8 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
     if (order.data) {
         try {
-            await request('POST', '/api/v2/mix/order/place-tpsl-order', {
+            // Correção: Endpoint atualizado para place-plan-order
+            await request('POST', '/api/v2/mix/order/place-plan-order', {
                 symbol,
                 productType:  'USDT-FUTURES',
                 marginCoin:   'USDT',
@@ -128,7 +129,8 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
         }
 
         try {
-            await request('POST', '/api/v2/mix/order/place-tpsl-order', {
+            // Correção: Endpoint atualizado para place-plan-order
+            await request('POST', '/api/v2/mix/order/place-plan-order', {
                 symbol,
                 productType:  'USDT-FUTURES',
                 marginCoin:   'USDT',
