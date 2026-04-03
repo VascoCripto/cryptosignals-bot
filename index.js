@@ -16,11 +16,16 @@ const bot = new TelegramBot(telegramToken, { polling: false });
 // Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
-const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE; // <-- CORRIGIDO AQUI (Tiramos o _API_)
+const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE; // Lendo corretamente do Railway
 const bitgetApiUrl = 'https://api.bitget.com';
 
 // Função para gerar a assinatura (HMAC SHA256)
-const generateSignature = (timestamp, method, requestPath, body = '') => {
+const generateSignature = (**Assembling the Complete Solution**
+
+I'm now completing the final touches. I've integrated `setLeverage` into `placeOrder`, made the size adjustment, and added a robust `try...catch` block to `setLeverage`. I am also building the Portuguese explanation for the user, and ensuring the response is clear and easily deployable. I'm focusing on providing the entire, runnable `index.js` file now, ready to be deployed.
+
+
+timestamp, method, requestPath, body = '') => {
     const message = timestamp + method + requestPath + body;
     return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
 };
@@ -69,12 +74,40 @@ const getOpenPositions = async (symbol) => {
     }
 };
 
+// Função para configurar a alavancagem
+const setLeverage = async (symbol, leverage, holdSide) => {
+    try {
+        console.log(`[BOT] Configurando alavancagem para ${leverage}x no par ${symbol}...`);
+        await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            leverage: leverage.toString(),
+            holdSide: holdSide
+        });
+        console.log('[BOT] Alavancagem configurada com sucesso!');
+    } catch (error) {
+        // Apenas avisa no log, não trava o bot se a alavancagem já estiver em 10x
+        console.log('[BOT] Aviso ao configurar alavancagem (pode já estar em 10x):', error.message);
+    }
+};
+
 // Função para enviar ordem (compra/venda) e configurar TP/SL
 const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
     try {
         const side = action === 'buy' ? 'buy' : 'sell';
         const holdSide = action === 'buy' ? 'long' : 'short';
-        const size = '0.001'; // Ajuste o tamanho da ordem conforme sua banca
+
+        // --- 1. FORÇA A ALAVANCAGEM PARA 10X ---
+        await setLeverage(symbol, 10, holdSide);
+
+        // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
+        const tamanhoEmDolares = 10; // Valor fixado em 10 dólares
+        let size = (tamanhoEmDolares / price).toFixed(2); 
+
+        if (symbol.includes('BTC')) {
+            size = (tamanhoEmDolares / price).toFixed(4);
+        }
 
         const orderData = {
             symbol: symbol,
@@ -84,7 +117,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size: size,
             side: side,
             tradeSide: 'open',
-            orderType: 'market' // Usando market para garantir que a ordem entre na hora
+            orderType: 'market' 
         };
 
         console.log('[BOT] Tentando colocar ordem principal:', orderData);
@@ -93,34 +126,18 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
 
         // Se a ordem principal abriu com sucesso, envia o Stop Loss e Take Profit
         if (response && response.code === '00000') {
-            // Configura Stop Loss
             try {
                 await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
-                    symbol,
-                    productType: 'USDT-FUTURES',
-                    marginCoin: 'USDT',
-                    planType: 'loss_plan',
-                    triggerPrice: stopLoss.toString(),
-                    triggerType: 'mark_price',
-                    executePrice: '0',
-                    holdSide: holdSide,
-                    size: size
+                    symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', planType: 'loss_plan',
+                    triggerPrice: stopLoss.toString(), triggerType: 'mark_price', executePrice: '0', holdSide: holdSide, size: size
                 });
                 console.log('[BOT] Stop Loss configurado:', stopLoss);
             } catch (e) { console.log('[BOT] Erro ao colocar SL:', e.message); }
 
-            // Configura Take Profit
             try {
                 await bitgetRequest('POST', '/api/v2/mix/order/place-plan-order', {
-                    symbol,
-                    productType: 'USDT-FUTURES',
-                    marginCoin: 'USDT',
-                    planType: 'profit_plan',
-                    triggerPrice: takeProfit.toString(),
-                    triggerType: 'mark_price',
-                    executePrice: '0',
-                    holdSide: holdSide,
-                    size: size
+                    symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', planType: 'profit_plan',
+                    triggerPrice: takeProfit.toString(), triggerType: 'mark_price', executePrice: '0', holdSide: holdSide, size: size
                 });
                 console.log('[BOT] Take Profit configurado:', takeProfit);
             } catch (e) { console.log('[BOT] Erro ao colocar TP:', e.message); }
@@ -165,7 +182,7 @@ const handleSignal = async (body) => {
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
-            `⚙️ *Alavancagem:* 5x a 10x\n\n` +
+            `⚙️ *Alavancagem:* 10x\n\n` +
             `💰 *Entrada:* \`${price}\`\n` +
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
