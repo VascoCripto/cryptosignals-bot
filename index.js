@@ -20,12 +20,7 @@ const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE; // Lendo corretamente
 const bitgetApiUrl = 'https://api.bitget.com';
 
 // Função para gerar a assinatura (HMAC SHA256)
-const generateSignature = (**Assembling the Complete Solution**
-
-I'm now completing the final touches. I've integrated `setLeverage` into `placeOrder`, made the size adjustment, and added a robust `try...catch` block to `setLeverage`. I am also building the Portuguese explanation for the user, and ensuring the response is clear and easily deployable. I'm focusing on providing the entire, runnable `index.js` file now, ready to be deployed.
-
-
-timestamp, method, requestPath, body = '') => {
+const generateSignature = (timestamp, method, requestPath, body = '') => {
     const message = timestamp + method + requestPath + body;
     return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
 };
