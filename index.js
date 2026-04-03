@@ -10,17 +10,15 @@ app.use(express.text({ type: '*/*' }));
 const TELEGRAM_TOKEN   = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// ─── Rota Telegram ────────────────────────────────────────────────────────────
+// ─── Rota Telegram (mensagens diretas) ───────────────────────────────────────
 app.post('/webhook', async (req, res) => {
     try {
         let message = '';
-
         if (typeof req.body === 'object' && req.body.message) {
             message = req.body.message;
         } else if (typeof req.body === 'string' && req.body.trim() !== '') {
             message = req.body;
         } else {
-            console.log('Body recebido:', req.body);
             return res.status(400).json({ error: 'Mensagem vazia ou formato inválido' });
         }
 
@@ -32,19 +30,45 @@ app.post('/webhook', async (req, res) => {
 
         console.log('✅ Mensagem enviada:', message.substring(0, 60) + '...');
         res.status(200).json({ ok: true });
-
     } catch (err) {
         console.error('❌ Erro:', err.response?.data || err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-// ─── Rota Bot MEXC ────────────────────────────────────────────────────────────
+// ─── Rota Bot Bitget ──────────────────────────────────────────────────────────
 app.post('/webhook-bot', async (req, res) => {
     try {
-        const result = await handleSignal(req.body);
-        console.log('[BOT] Resultado:', JSON.stringify(result));
-        return res.json(result);
+        const body = req.body;
+
+        // Se for JSON com os campos esperados → executa a ordem
+        if (body && body.action && body.symbol && body.price) {
+            console.log('[BOT] Sinal recebido:', JSON.stringify(body));
+            const result = await handleSignal(body);
+            console.log('[BOT] Resultado:', JSON.stringify(result));
+            return res.json(result);
+        }
+
+        // Caso contrário → é mensagem formatada, encaminha pro Telegram
+        let message = '';
+        if (typeof body === 'string' && body.trim() !== '') {
+            message = body;
+        } else if (body && body.message) {
+            message = body.message;
+        } else {
+            console.log('[BOT] Payload ignorado (sem campos válidos):', body);
+            return res.status(200).json({ ok: true, status: 'ignored' });
+        }
+
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id:    TELEGRAM_CHAT_ID,
+            text:       message,
+            parse_mode: 'Markdown'
+        });
+
+        console.log('✅ Mensagem Telegram enviada:', message.substring(0, 60) + '...');
+        return res.status(200).json({ ok: true });
+
     } catch (err) {
         console.error('[BOT] Erro inesperado:', err.message);
         return res.status(500).json({ status: 'error', reason: err.message });

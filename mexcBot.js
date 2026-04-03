@@ -3,6 +3,12 @@ const https  = require('https');
 
 const BASE_URL = 'api.bitget.com';
 
+let botState = 'idle';
+
+function getState() {
+    return botState;
+}
+
 function sign(timestamp, method, path, body) {
     const message = timestamp + method.toUpperCase() + path + (body ? JSON.stringify(body) : '');
     return crypto.createHmac('sha256', process.env.BITGET_API_SECRET).update(message).digest('base64');
@@ -47,10 +53,14 @@ function request(method, path, body = null) {
     });
 }
 
-async function hasOpenPosition() {
+async function getOpenPositions() {
     const res = await request('GET', '/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT');
     const positions = res.data ?? [];
-    const open = positions.filter(p => parseFloat(p.total) > 0);
+    return positions.filter(p => parseFloat(p.total) > 0);
+}
+
+async function hasOpenPosition() {
+    const open = await getOpenPositions();
     console.log('[BOT] Posições abertas:', open.length);
     return open.length > 0;
 }
@@ -140,20 +150,38 @@ async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
 
 async function handleSignal({ action, symbol, price, stopLoss, takeProfit }) {
     try {
+        // Validação dos campos obrigatórios
+        if (!action || !symbol || !price) {
+            console.log('[BOT] Payload inválido, campos faltando:', { action, symbol, price });
+            return { status: 'ignorado', reason: 'payload inválido' };
+        }
+
+        botState = 'checking';
         const posicaoAberta = await hasOpenPosition();
         if (posicaoAberta) {
             console.log('[BOT] Já existe uma posição aberta. Sinal ignorado.');
+            botState = 'idle';
             return { status: 'ignorado', reason: 'posição já aberta' };
         }
 
-        const normalizedSymbol = symbol.replace('_', '');
+        botState = 'trading';
+        const normalizedSymbol = symbol.replace('_', '').toUpperCase();
         const side   = action === 'buy' ? 'buy' : 'sell';
-        const result = await placeOrder({ symbol: normalizedSymbol, side, price, stopLoss, takeProfit });
+        const result = await placeOrder({
+            symbol: normalizedSymbol,
+            side,
+            price:       parseFloat(price),
+            stopLoss:    parseFloat(stopLoss),
+            takeProfit:  parseFloat(takeProfit)
+        });
+
+        botState = 'idle';
         return { status: 'ok', data: result };
     } catch (err) {
+        botState = 'idle';
         console.log('[BOT] Erro inesperado:', err.message);
         return { status: 'error', reason: err.message };
     }
 }
 
-module.exports = { handleSignal };
+module.exports = { handleSignal, getState, getOpenPositions, getBalance };
