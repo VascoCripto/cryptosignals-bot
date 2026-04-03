@@ -9,15 +9,14 @@ function sign(timestamp, method, requestPath, body, secret) {
 }
 
 function toSymbol(symbol) {
-    // converte BTC_USDT → BTCUSDT_UMCBL
-    return symbol.replace('_', '') + '_UMCBL';
+    return symbol.replace('_', '') + 'USDT';
 }
 
 async function request(method, path, params = {}) {
-    const apiKey      = process.env.BITGET_API_KEY;
-    const apiSecret   = process.env.BITGET_API_SECRET;
-    const passphrase  = process.env.BITGET_PASSPHRASE;
-    const timestamp   = Date.now().toString();
+    const apiKey     = process.env.BITGET_API_KEY;
+    const apiSecret  = process.env.BITGET_API_SECRET;
+    const passphrase = process.env.BITGET_PASSPHRASE;
+    const timestamp  = Date.now().toString();
 
     let requestPath = path;
     let body = '';
@@ -59,17 +58,18 @@ async function request(method, path, params = {}) {
 }
 
 async function setLeverage(symbol, leverage, holdSide) {
-    return request('POST', '/api/mix/v1/account/setLeverage', {
+    return request('POST', '/api/v2/mix/account/set-leverage', {
         symbol,
-        marginCoin: 'USDT',
-        leverage:   String(leverage),
+        productType: 'USDT-FUTURES',
+        marginCoin:  'USDT',
+        leverage:    String(leverage),
         holdSide
     });
 }
 
 async function getBalance() {
     try {
-        const res = await request('GET', '/api/mix/v1/account/accounts', { productType: 'umcbl' });
+        const res = await request('GET', '/api/v2/mix/account/accounts', { productType: 'USDT-FUTURES' });
         const usdt = res.data?.find(a => a.marginCoin === 'USDT');
         console.log('[BOT] Saldo encontrado:', usdt);
         return usdt ? parseFloat(usdt.available) : 0;
@@ -81,7 +81,7 @@ async function getBalance() {
 
 async function getOpenPositions() {
     try {
-        const res = await request('GET', '/api/mix/v1/position/allPosition', { productType: 'umcbl' });
+        const res = await request('GET', '/api/v2/mix/position/all-position', { productType: 'USDT-FUTURES', marginCoin: 'USDT' });
         return res.data || [];
     } catch (err) {
         console.error('[BOT] Erro ao buscar posições:', err.message);
@@ -90,29 +90,31 @@ async function getOpenPositions() {
 }
 
 async function placeOrder({ symbol, side, price, stopLoss, takeProfit }) {
-    const leverage   = parseInt(process.env.LEVERAGE) || 5;
-    const capital    = parseFloat(process.env.CAPITAL_PER_TRADE) || 10;
-    const holdSide   = side === 'open_long' ? 'long' : 'short';
+    const leverage = parseInt(process.env.LEVERAGE) || 5;
+    const capital  = parseFloat(process.env.CAPITAL_PER_TRADE) || 10;
+    const holdSide = side === 'buy' ? 'long' : 'short';
 
     await setLeverage(symbol, leverage, holdSide);
 
-    const balance  = await getBalance();
-    const useUSDT  = (balance * capital) / 100;
-    const size     = ((useUSDT * leverage) / price).toFixed(4);
+    const balance = await getBalance();
+    const useUSDT = (balance * capital) / 100;
+    const size    = ((useUSDT * leverage) / price).toFixed(4);
 
     console.log(`[BOT] Saldo: ${balance} USDT | Margem: ${useUSDT} | Size: ${size}`);
 
     if (parseFloat(size) <= 0) throw new Error(`Size inválido — saldo: ${balance} USDT`);
 
-    return request('POST', '/api/mix/v1/order/placeOrder', {
+    return request('POST', '/api/v2/mix/order/place-order', {
         symbol,
+        productType:            'USDT-FUTURES',
+        marginMode:             'isolated',
         marginCoin:             'USDT',
         size,
         side,
+        tradeSide:              'open',
         orderType:              'market',
-        presetTakeProfitPrice:  String(takeProfit),
         presetStopLossPrice:    String(stopLoss),
-        leverage:               String(leverage)
+        presetStopSurplusPrice: String(takeProfit)
     });
 }
 
@@ -130,7 +132,7 @@ async function handleSignal(body) {
     if (action === 'buy' || action === 'sell') {
         if (state.active) return { status: 'skipped', reason: 'já há posição aberta' };
 
-        const side = action === 'buy' ? 'open_long' : 'open_short';
+        const side = action === 'buy' ? 'buy' : 'sell';
         const res  = await placeOrder({ symbol: bgSymbol, side, price, stopLoss, takeProfit });
 
         console.log('[BOT] Resposta Bitget:', JSON.stringify(res));
