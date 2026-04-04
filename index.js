@@ -152,11 +152,11 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
-        if (!positionDetails || !positionDetails.averageOpenPrice) {
-            console.error('[BOT] Erro: positionDetails ou averageOpenPrice não encontrados. Detalhes da posição:', positionDetails);
+        if (!positionDetails || !positionDetails.openPriceAvg) { // <-- CORRIGIDO AQUI
+            console.error('[BOT] Erro: positionDetails ou openPriceAvg não encontrados. Detalhes da posição:', positionDetails);
             throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
         }
-        const realEntryPrice = parseFloat(positionDetails.averageOpenPrice);
+        const realEntryPrice = parseFloat(positionDetails.openPriceAvg); // <-- CORRIGIDO AQUI
         console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
 
         // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
