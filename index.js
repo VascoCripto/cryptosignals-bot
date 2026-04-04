@@ -140,7 +140,6 @@ const handleSignal = async (body) => {
 
         if (!action || !symbol || !price || !stopLoss || !takeProfit) {
             console.error('[BOT] Erro: Sinal JSON incompleto ou inválido.');
-            await bot.sendMessage(telegramChatId, `❌ Erro: Sinal JSON incompleto ou inválido recebido.`, { parse_mode: 'Markdown' });
             return;
         }
 
@@ -149,15 +148,7 @@ const handleSignal = async (body) => {
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
-        // Verifica se já existe uma posição aberta para o símbolo
-        const hasOpenPosition = await getOpenPositions(normalizedSymbol);
-        if (hasOpenPosition) {
-            console.log('[BOT] Já existe uma posição aberta. Sinal ignorado.');
-            await bot.sendMessage(telegramChatId, `⚠️ *Sinal Ignorado:* Já existe uma posição aberta para ${normalizedSymbol}.`, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        // Envia a mensagem para o Telegram
+        // 1. ENVIA A MENSAGEM PARA O TELEGRAM PRIMEIRO (Para o grupo VIP ver)
         const telegramMsg =
             `${emoji} *SINAL DE ${tipo}*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -174,13 +165,22 @@ const handleSignal = async (body) => {
             `_Sinal gerado por IA_`;
 
         await bot.sendMessage(telegramChatId, telegramMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-        console.log('[BOT] Telegram de entrada enviado');
+        console.log('[BOT] Telegram de entrada enviado para o grupo VIP');
 
-        // Coloca a ordem na Bitget
+        // 2. VERIFICA A BITGET DEPOIS DE ENVIAR O SINAL
+        const hasOpenPosition = await getOpenPositions(normalizedSymbol);
+        if (hasOpenPosition) {
+            console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
+            // Envia um aviso discreto apenas para informar que a automação pulou essa entrada
+            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        // 3. COLOCA A ORDEM NA BITGET (Se não houver posição aberta)
         const orderResult = await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit);
         console.log('[BOT] Resultado da ordem:', orderResult);
 
-        await bot.sendMessage(telegramChatId, `✅ Ordem de ${tipo} para ${normalizedSymbol} enviada com sucesso!`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso!`, { parse_mode: 'Markdown' });
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
