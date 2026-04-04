@@ -78,6 +78,7 @@ const getPositionDetails = async (symbol, holdSide) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
         if (response && response.data && response.data.length > 0) {
+            // Filtra pela moeda e pelo lado da posição (long/short)
             const position = response.data.find(pos => pos.symbol === symbol && pos.holdSide === holdSide && parseFloat(pos.total) > 0);
             return position; // Retorna o objeto da posição
         }
@@ -145,13 +146,14 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         console.log('[BOT] Ordem principal executada com sucesso!');
 
-        // --- AGUARDA 2 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
-        console.log('[BOT] Aguardando 2 segundos para sincronização da posição na Bitget...');
-        await sleep(2000);
+        // --- AGUARDA 5 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
+        console.log('[BOT] Aguardando 5 segundos para sincronização da posição na Bitget...');
+        await sleep(5000); // Aumentado para 5 segundos
 
         // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
         if (!positionDetails || !positionDetails.averageOpenPrice) {
+            console.error('[BOT] Erro: positionDetails ou averageOpenPrice não encontrados. Detalhes da posição:', positionDetails);
             throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
         }
         const realEntryPrice = parseFloat(positionDetails.averageOpenPrice);
