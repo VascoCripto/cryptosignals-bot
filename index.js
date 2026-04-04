@@ -49,7 +49,7 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         const response = await axios(config);
         return response.data;
     } catch (error) {
-        console.error('[BOT] Erro na requisição Bitget API:', error.response ? error.response.data : error.message);
+        console.error('[BOT] Erro na requisição Bitget API:', error.response ? JSON.stringify(error.response.data) : error.message);
         throw error;
     }
 };
@@ -82,7 +82,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
         });
         console.log('[BOT] Alavancagem configurada com sucesso!');
     } catch (error) {
-        console.log('[BOT] Aviso ao configurar alavancagem (pode já estar em 10x):', error.message);
+        console.log('[BOT] Aviso ao configurar alavancagem (pode já estar configurada):', error.message);
     }
 };
 
@@ -96,17 +96,18 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         const alavancagem = 10;
         await setLeverage(symbol, alavancagem, holdSide);
 
-        // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM (MARGEM REAL) ---
+        // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
         const margemDesejada = 5; // Valor do SEU SALDO que será usado na operação (5 dólares)
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; // 5 * 10 = 50 dólares de posição
 
         let size = (tamanhoTotalDaPosicao / price).toFixed(2); 
-
         if (symbol.includes('BTC')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(4);
+        } else if (symbol.includes('ETH')) {
+            size = (tamanhoTotalDaPosicao / price).toFixed(3);
         }
 
-        // --- 3. ORDEM PRINCIPAL COM TP E SL EMBUTIDOS ---
+        // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -115,18 +116,31 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size: size,
             side: side,
             tradeSide: 'open',
-            orderType: 'market',
+            orderType: 'market'
+        };
+
+        console.log('[BOT] Enviando ordem principal a mercado:', orderData);
+        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        console.log('[BOT] Ordem principal executada com sucesso!');
+
+        // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
+        const tpslData = {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            planType: 'pos_profit_loss', // Define que o TP/SL é para a posição inteira
+            holdSide: holdSide,
             presetTakeProfitPrice: takeProfit.toString(),
             presetStopLossPrice: stopLoss.toString()
         };
 
-        console.log('[BOT] Tentando colocar ordem principal com TP/SL:', orderData);
-        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Ordem principal enviada:', response);
+        console.log('[BOT] Configurando TP e SL na corretora:', tpslData);
+        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpslData);
+        console.log('[BOT] TP e SL configurados com sucesso e visíveis na Bitget!');
 
         return response;
     } catch (error) {
-        console.error('[BOT] Erro ao colocar ordem:', error.message);
+        console.error('[BOT] Erro ao colocar ordem ou TP/SL:', error.message);
         throw error;
     }
 };
@@ -148,7 +162,7 @@ const handleSignal = async (body) => {
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
-        // 1. ENVIA A MENSAGEM PARA O TELEGRAM PRIMEIRO (Para o grupo VIP ver)
+        // 1. ENVIA A MENSAGEM PARA O TELEGRAM PRIMEIRO
         const telegramMsg =
             `${emoji} *SINAL DE ${tipo}*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -171,16 +185,15 @@ const handleSignal = async (body) => {
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
-            // Envia um aviso discreto apenas para informar que a automação pulou essa entrada
             await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
             return;
         }
 
-        // 3. COLOCA A ORDEM NA BITGET (Se não houver posição aberta)
-        const orderResult = await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit);
-        console.log('[BOT] Resultado da ordem:', orderResult);
+        // 3. COLOCA A ORDEM NA BITGET E SETA TP/SL
+        await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit);
+        console.log('[BOT] Operação concluída com sucesso!');
 
-        await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso!`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
