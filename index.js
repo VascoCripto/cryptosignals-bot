@@ -19,6 +19,9 @@ const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
 const bitgetApiUrl = 'https://api.bitget.com';
 
+// Função para pausar a execução (delay)
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Função para gerar a assinatura (HMAC SHA256)
 const generateSignature = (timestamp, method, requestPath, body = '') => {
     const message = timestamp + method + requestPath + body;
@@ -124,39 +127,53 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         console.log('[BOT] Ordem principal executada com sucesso!');
 
+        // --- AGUARDA 2 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
+        console.log('[BOT] Aguardando 2 segundos para sincronização da posição na Bitget...');
+        await sleep(2000);
+
         // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
 
         // 4.1 Envia o Take Profit
-        const tpData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            planType: 'pos_profit_loss',
-            holdSide: holdSide,
-            triggerPrice: takeProfit.toString(),
-            triggerType: 'mark_price'
-        };
-        console.log('[BOT] Configurando Take Profit:', tpData);
-        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpData);
+        try {
+            const tpData = {
+                symbol: symbol,
+                productType: 'USDT-FUTURES',
+                marginCoin: 'USDT',
+                planType: 'pos_profit_loss',
+                holdSide: holdSide,
+                triggerPrice: takeProfit.toString(),
+                triggerType: 'mark_price'
+            };
+            console.log('[BOT] Configurando Take Profit:', tpData);
+            await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpData);
+        } catch (errTp) {
+            console.error('[BOT] Erro isolado no Take Profit:', errTp.message);
+            throw new Error(`A ordem foi aberta, mas a Bitget recusou o Take Profit. Erro: ${errTp.message}`);
+        }
 
         // 4.2 Envia o Stop Loss
-        const slData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            planType: 'pos_profit_loss',
-            holdSide: holdSide,
-            triggerPrice: stopLoss.toString(),
-            triggerType: 'mark_price'
-        };
-        console.log('[BOT] Configurando Stop Loss:', slData);
-        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', slData);
+        try {
+            const slData = {
+                symbol: symbol,
+                productType: 'USDT-FUTURES',
+                marginCoin: 'USDT',
+                planType: 'pos_profit_loss',
+                holdSide: holdSide,
+                triggerPrice: stopLoss.toString(),
+                triggerType: 'mark_price'
+            };
+            console.log('[BOT] Configurando Stop Loss:', slData);
+            await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', slData);
+        } catch (errSl) {
+            console.error('[BOT] Erro isolado no Stop Loss:', errSl.message);
+            throw new Error(`A ordem e o TP foram processados, mas a Bitget recusou o Stop Loss. Erro: ${errSl.message}`);
+        }
 
         console.log('[BOT] TP e SL configurados com sucesso e visíveis na Bitget!');
 
         return response;
     } catch (error) {
-        console.error('[BOT] Erro ao colocar ordem ou TP/SL:', error.message);
+        console.error('[BOT] Erro na função placeOrder:', error.message);
         throw error;
     }
 };
