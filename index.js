@@ -49,8 +49,10 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         const response = await axios(config);
         return response.data;
     } catch (error) {
-        console.error('[BOT] Erro na requisição Bitget API:', error.response ? JSON.stringify(error.response.data) : error.message);
-        throw error;
+        // Captura o erro exato da Bitget para facilitar o diagnóstico no Telegram
+        const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
+        console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
+        throw new Error(errorDetails);
     }
 };
 
@@ -107,7 +109,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size = (tamanhoTotalDaPosicao / price).toFixed(3);
         }
 
-        // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
+        // --- 3. ORDEM ÚNICA: ABRIR POSIÇÃO JÁ COM TP E SL EMBUTIDOS ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -116,31 +118,18 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size: size,
             side: side,
             tradeSide: 'open',
-            orderType: 'market'
-        };
-
-        console.log('[BOT] Enviando ordem principal a mercado:', orderData);
-        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Ordem principal executada com sucesso!');
-
-        // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
-        const tpslData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            planType: 'pos_profit_loss', // Define que o TP/SL é para a posição inteira
-            holdSide: holdSide,
+            orderType: 'market',
             presetTakeProfitPrice: takeProfit.toString(),
             presetStopLossPrice: stopLoss.toString()
         };
 
-        console.log('[BOT] Configurando TP e SL na corretora:', tpslData);
-        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpslData);
-        console.log('[BOT] TP e SL configurados com sucesso e visíveis na Bitget!');
+        console.log('[BOT] Enviando ordem principal com TP/SL embutidos:', orderData);
+        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        console.log('[BOT] Ordem executada com sucesso e protegida!');
 
         return response;
     } catch (error) {
-        console.error('[BOT] Erro ao colocar ordem ou TP/SL:', error.message);
+        console.error('[BOT] Erro ao colocar ordem:', error.message);
         throw error;
     }
 };
