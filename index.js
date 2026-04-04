@@ -49,7 +49,6 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         const response = await axios(config);
         return response.data;
     } catch (error) {
-        // Captura o erro exato da Bitget para facilitar o diagnóstico no Telegram
         const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
         console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
         throw new Error(errorDetails);
@@ -84,7 +83,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
         });
         console.log('[BOT] Alavancagem configurada com sucesso!');
     } catch (error) {
-        console.log('[BOT] Aviso ao configurar alavancagem (pode já estar configurada):', error.message);
+        console.log('[BOT] Aviso ao configurar alavancagem:', error.message);
     }
 };
 
@@ -99,8 +98,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         await setLeverage(symbol, alavancagem, holdSide);
 
         // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
-        const margemDesejada = 5; // Valor do SEU SALDO que será usado na operação (5 dólares)
-        const tamanhoTotalDaPosicao = margemDesejada * alavancagem; // 5 * 10 = 50 dólares de posição
+        const margemDesejada = 5; 
+        const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
 
         let size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         if (symbol.includes('BTC')) {
@@ -109,7 +108,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size = (tamanhoTotalDaPosicao / price).toFixed(3);
         }
 
-        // --- 3. ORDEM ÚNICA: ABRIR POSIÇÃO JÁ COM TP E SL EMBUTIDOS ---
+        // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -118,18 +117,31 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size: size,
             side: side,
             tradeSide: 'open',
-            orderType: 'market',
+            orderType: 'market'
+        };
+
+        console.log('[BOT] Enviando ordem principal a mercado:', orderData);
+        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        console.log('[BOT] Ordem principal executada com sucesso!');
+
+        // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
+        const tpslData = {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            planType: 'pos_profit_loss', // Define que o TP/SL é para a posição inteira
+            holdSide: holdSide,
             presetTakeProfitPrice: takeProfit.toString(),
             presetStopLossPrice: stopLoss.toString()
         };
 
-        console.log('[BOT] Enviando ordem principal com TP/SL embutidos:', orderData);
-        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Ordem executada com sucesso e protegida!');
+        console.log('[BOT] Configurando TP e SL na corretora:', tpslData);
+        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpslData);
+        console.log('[BOT] TP e SL configurados com sucesso e visíveis na Bitget!');
 
         return response;
     } catch (error) {
-        console.error('[BOT] Erro ao colocar ordem:', error.message);
+        console.error('[BOT] Erro ao colocar ordem ou TP/SL:', error.message);
         throw error;
     }
 };
@@ -195,7 +207,6 @@ app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
 
-        // Verifica se é um sinal de saída (TP/SL atingido)
         if (body.result_icon && body.placar_str) {
             console.log('[BOT] Mensagem de saída detectada, enviando ao Telegram...');
             const exitMsg = body.result_icon + "\n" +
@@ -210,7 +221,6 @@ app.post('/webhook-bot', async (req, res) => {
 
             await bot.sendMessage(telegramChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         } else {
-            // Se não for um sinal de saída, trata como sinal de entrada
             await handleSignal(body);
         }
 
@@ -221,7 +231,6 @@ app.post('/webhook-bot', async (req, res) => {
     }
 });
 
-// Rota de saúde para verificar se o bot está online
 app.get('/', (req, res) => {
     res.status(200).send('Bot de sinais está online!');
 });
