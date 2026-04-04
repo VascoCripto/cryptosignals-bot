@@ -152,11 +152,11 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
-        if (!positionDetails || !positionDetails.openPriceAvg) { // <-- CORRIGIDO AQUI
+        if (!positionDetails || !positionDetails.openPriceAvg) { 
             console.error('[BOT] Erro: positionDetails ou openPriceAvg não encontrados. Detalhes da posição:', positionDetails);
             throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
         }
-        const realEntryPrice = parseFloat(positionDetails.openPriceAvg); // <-- CORRIGIDO AQUI
+        const realEntryPrice = parseFloat(positionDetails.openPriceAvg); 
         console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
 
         // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
@@ -174,7 +174,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // Determinar a precisão para arredondamento (ajuste conforme a Bitget aceita para cada par)
         let precision = 2; // Padrão para USDT
-        if (symbol.includes('BTC')) precision = 2; // BTCUSDT geralmente 2 casas decimais para preço
+        if (symbol.includes('BTC')) precision = 1; // <-- CORRIGIDO AQUI: 1 casa decimal para BTCUSDT
         else if (symbol.includes('ETH')) precision = 2; // ETHUSDT geralmente 2 casas decimais para preço
         else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; // Moedas mais baratas podem ter mais casas
 
