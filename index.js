@@ -125,18 +125,33 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         console.log('[BOT] Ordem principal executada com sucesso!');
 
         // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
-        const tpslData = {
+
+        // 4.1 Envia o Take Profit
+        const tpData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
             marginCoin: 'USDT',
-            planType: 'pos_profit_loss', // Define que o TP/SL é para a posição inteira
+            planType: 'pos_profit_loss',
             holdSide: holdSide,
-            presetTakeProfitPrice: takeProfit.toString(),
-            presetStopLossPrice: stopLoss.toString()
+            triggerPrice: takeProfit.toString(),
+            triggerType: 'mark_price'
         };
+        console.log('[BOT] Configurando Take Profit:', tpData);
+        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpData);
 
-        console.log('[BOT] Configurando TP e SL na corretora:', tpslData);
-        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpslData);
+        // 4.2 Envia o Stop Loss
+        const slData = {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            planType: 'pos_profit_loss',
+            holdSide: holdSide,
+            triggerPrice: stopLoss.toString(),
+            triggerType: 'mark_price'
+        };
+        console.log('[BOT] Configurando Stop Loss:', slData);
+        await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', slData);
+
         console.log('[BOT] TP e SL configurados com sucesso e visíveis na Bitget!');
 
         return response;
