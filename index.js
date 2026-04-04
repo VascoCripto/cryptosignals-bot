@@ -58,7 +58,7 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// Função para verificar posições abertas
+// Função para verificar posições abertas (retorna true/false)
 const getOpenPositions = async (symbol) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
@@ -70,6 +70,21 @@ const getOpenPositions = async (symbol) => {
     } catch (error) {
         console.error('[BOT] Erro ao verificar posições abertas:', error.message);
         return false;
+    }
+};
+
+// NOVA FUNÇÃO: Para obter os detalhes de uma posição aberta específica, incluindo o preço de entrada
+const getPositionDetails = async (symbol, holdSide) => {
+    try {
+        const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
+        if (response && response.data && response.data.length > 0) {
+            const position = response.data.find(pos => pos.symbol === symbol && pos.holdSide === holdSide && parseFloat(pos.total) > 0);
+            return position; // Retorna o objeto da posição
+        }
+        return null;
+    } catch (error) {
+        console.error('[BOT] Erro ao obter detalhes da posição:', error.message);
+        return null;
     }
 };
 
@@ -91,7 +106,8 @@ const setLeverage = async (symbol, leverage, holdSide) => {
 };
 
 // Função para enviar ordem (compra/venda) e configurar TP/SL
-const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
+// Agora recebe slPct e tpPct para recalcular o TP/SL com base no preço de entrada real
+const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tpPct) => {
     try {
         const side = action === 'buy' ? 'buy' : 'sell';
         const holdSide = action === 'buy' ? 'long' : 'short';
@@ -133,6 +149,39 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
         console.log('[BOT] Aguardando 2 segundos para sincronização da posição na Bitget...');
         await sleep(2000);
 
+        // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
+        const positionDetails = await getPositionDetails(symbol, holdSide);
+        if (!positionDetails || !positionDetails.averageOpenPrice) {
+            throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
+        }
+        const realEntryPrice = parseFloat(positionDetails.averageOpenPrice);
+        console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
+
+        // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
+        let recalculatedTakeProfit;
+        let recalculatedStopLoss;
+
+        // slPct e tpPct já vêm como números (ex: -1.54, 2.31)
+        if (action === 'buy') { // LONG
+            recalculatedTakeProfit = realEntryPrice * (1 + (tpPct / 100));
+            recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); // slPct é negativo para SL
+        } else { // SHORT
+            recalculatedTakeProfit = realEntryPrice * (1 - (tpPct / 100)); // tpPct é positivo para TP
+            recalculatedStopLoss = realEntryPrice * (1 - (slPct / 100)); // slPct é negativo para SL
+        }
+
+        // Determinar a precisão para arredondamento (ajuste conforme a Bitget aceita para cada par)
+        let precision = 2; // Padrão para USDT
+        if (symbol.includes('BTC')) precision = 2; // BTCUSDT geralmente 2 casas decimais para preço
+        else if (symbol.includes('ETH')) precision = 2; // ETHUSDT geralmente 2 casas decimais para preço
+        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; // Moedas mais baratas podem ter mais casas
+
+        recalculatedTakeProfit = recalculatedTakeProfit.toFixed(precision);
+        recalculatedStopLoss = recalculatedStopLoss.toFixed(precision);
+
+        console.log(`[BOT] TP recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedTakeProfit}`);
+        console.log(`[BOT] SL recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedStopLoss}`);
+
         // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA USANDO O ENDPOINT CORRETO ---
         try {
             const posTpslData = {
@@ -140,15 +189,12 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
                 productType: 'USDT-FUTURES',
                 marginCoin: 'USDT',
                 holdSide: holdSide,
-                // Take Profit
-                stopSurplusTriggerPrice: takeProfit.toString(),
-                stopSurplusTriggerType: 'mark_price', // Ou 'fill_price' se preferir preço de mercado
-                // stopSurplusExecutePrice: '0', // Opcional: 0 para mercado, >0 para limite
-                // Stop Loss
-                stopLossTriggerPrice: stopLoss.toString(),
-                stopLossTriggerType: 'mark_price', // Ou 'fill_price' se preferir preço de mercado
-                // stopLossExecutePrice: '0', // Opcional: 0 para mercado, >0 para limite
-                // Não inclua stopSurplusSize e stopLossSize para que se aplique à posição inteira
+                // Take Profit (usando o valor recalculado)
+                stopSurplusTriggerPrice: recalculatedTakeProfit.toString(),
+                stopSurplusTriggerType: 'mark_price',
+                // Stop Loss (usando o valor recalculado)
+                stopLossTriggerPrice: recalculatedStopLoss.toString(),
+                stopLossTriggerType: 'mark_price',
             };
             console.log('[BOT] Configurando Take Profit e Stop Loss na posição:', posTpslData);
             await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
@@ -172,8 +218,8 @@ const handleSignal = async (body) => {
 
         const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
 
-        if (!action || !symbol || !price || !stopLoss || !takeProfit) {
-            console.error('[BOT] Erro: Sinal JSON incompleto ou inválido.');
+        if (!action || !symbol || !price || !stopLoss || !takeProfit || slPct === undefined || tpPct === undefined) {
+            console.error('[BOT] Erro: Sinal JSON incompleto ou inválido. Certifique-se de que slPct e tpPct estão presentes.');
             return;
         }
 
@@ -210,7 +256,8 @@ const handleSignal = async (body) => {
         }
 
         // 3. COLOCA A ORDEM NA BITGET E SETA TP/SL
-        await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit);
+        // Passa slPct e tpPct para a função placeOrder
+        await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
         console.log('[BOT] Operação concluída com sucesso!');
 
         await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
