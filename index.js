@@ -109,6 +109,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             size = (tamanhoTotalDaPosicao / price).toFixed(4);
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3);
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
+            size = Math.floor(tamanhoTotalDaPosicao / price).toString(); // Moedas baratas geralmente exigem número inteiro
         }
 
         // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
@@ -133,7 +135,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
 
         // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
 
-        // 4.1 Envia o Take Profit
+        // 4.1 Envia o Take Profit (Sem o campo size)
         try {
             const tpData = {
                 symbol: symbol,
@@ -151,7 +153,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             throw new Error(`A ordem foi aberta, mas a Bitget recusou o Take Profit. Erro: ${errTp.message}`);
         }
 
-        // 4.2 Envia o Stop Loss
+        // 4.2 Envia o Stop Loss (Sem o campo size)
         try {
             const slData = {
                 symbol: symbol,
