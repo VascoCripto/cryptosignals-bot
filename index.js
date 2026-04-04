@@ -135,7 +135,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
 
         // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
 
-        // 4.1 Envia o Take Profit (Sem o campo size)
+        // 4.1 Envia o Take Profit (AGORA COM O CAMPO size)
         try {
             const tpData = {
                 symbol: symbol,
@@ -144,7 +144,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
                 planType: 'pos_profit_loss',
                 holdSide: holdSide,
                 triggerPrice: takeProfit.toString(),
-                triggerType: 'mark_price'
+                triggerType: 'mark_price',
+                size: size // <--- CAMPO size ADICIONADO AQUI
             };
             console.log('[BOT] Configurando Take Profit:', tpData);
             await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', tpData);
@@ -153,7 +154,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
             throw new Error(`A ordem foi aberta, mas a Bitget recusou o Take Profit. Erro: ${errTp.message}`);
         }
 
-        // 4.2 Envia o Stop Loss (Sem o campo size)
+        // 4.2 Envia o Stop Loss (AGORA COM O CAMPO size)
         try {
             const slData = {
                 symbol: symbol,
@@ -162,7 +163,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
                 planType: 'pos_profit_loss',
                 holdSide: holdSide,
                 triggerPrice: stopLoss.toString(),
-                triggerType: 'mark_price'
+                triggerType: 'mark_price',
+                size: size // <--- CAMPO size ADICIONADO AQUI
             };
             console.log('[BOT] Configurando Stop Loss:', slData);
             await bitgetRequest('POST', '/api/v2/mix/order/place-tpsl-order', slData);
