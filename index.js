@@ -137,8 +137,10 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let alavancagem = 10; // Alavancagem padrão
 
         // Ajusta a alavancagem para moedas de baixo valor
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) {
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
+        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - ALAVANCAGEM AJUSTADA PARA 2X
+            alavancagem = 2; // Reduz alavancagem para 2x para ZEC
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
@@ -152,8 +154,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             margemDesejada = 10; // $10 USD de margem para BGB
         } else if (symbol.includes('ICP')) { // CONDIÇÃO ESPECÍFICA PARA ICP
             margemDesejada = 10; // $10 USD de margem para ICP
-        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - AJUSTADO PARA 3 USD
-            margemDesejada = 3; // $3 USD de margem para ZEC (tentativa de contornar o erro de saldo)
+        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - MARGEM AJUSTADA PARA 2 USD
+            margemDesejada = 2; // $2 USD de margem para ZEC
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
@@ -166,13 +168,13 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT') || symbol.includes('ZEC')) { // ZEC adicionado aqui para arredondar para inteiro
             size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para 0 casas decimais (inteiro)
-        } else { // Para ICP, AVAX, ZEC, SOL e outros que não se encaixam acima
+        } else { // Para ICP, AVAX, SOL e outros que não se encaixam acima
             size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para outras moedas
         }
 
-        console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
+        console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
         // --- NOVA VERIFICAÇÃO DE SALDO ANTES DE ABRIR A ORDEM ---
         const availableBalance = await getAvailableBalance();
