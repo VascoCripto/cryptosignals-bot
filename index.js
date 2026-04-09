@@ -127,7 +127,6 @@ const setLeverage = async (symbol, leverage, holdSide) => {
 };
 
 // Função para enviar ordem (compra/venda) e configurar TP/SL
-// Agora recebe slPct e tpPct para recalcular o TP/SL com base no preço de entrada real
 const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tpPct) => {
     try {
         const side = action === 'buy' ? 'buy' : 'sell';
@@ -139,8 +138,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a alavancagem para moedas de baixo valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
-        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - ALAVANCAGEM AJUSTADA PARA 5X
-            alavancagem = 5; // Reduz alavancagem para 5x para ZEC
+        } else if (symbol.includes('ZEC')) { 
+            alavancagem = 10; // Alavancagem padrão para ZEC
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
@@ -149,15 +148,15 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // Ajusta a margem desejada para moedas de baixo/médio valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
-            margemDesejada = 5; // $5 USD de margem para XRP, ADA, DOGE
-        } else if (symbol.includes('BGB')) { // CONDIÇÃO ESPECÍFICA PARA BGB
-            margemDesejada = 10; // $10 USD de margem para BGB
-        } else if (symbol.includes('ICP')) { // CONDIÇÃO ESPECÍFICA PARA ICP
-            margemDesejada = 10; // $10 USD de margem para ICP
-        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - MARGEM AJUSTADA PARA 5 USD
-            margemDesejada = 5; // $5 USD de margem para ZEC
+            margemDesejada = 5; 
+        } else if (symbol.includes('BGB')) { 
+            margemDesejada = 10; 
+        } else if (symbol.includes('ICP')) { 
+            margemDesejada = 10; 
+        } else if (symbol.includes('ZEC')) { 
+            margemDesejada = 10; 
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
-            margemDesejada = 15; // $15 USD para esses ativos
+            margemDesejada = 15; 
         }
 
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
@@ -169,32 +168,37 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3); 
         } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para 0 casas decimais (inteiro)
-        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ZEC')) { // ZEC adicionado aqui para 2 casas decimais
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para essas moedas
-        } else { // Para outros que não se encaixam acima
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão geral
+            size = (tamanhoTotalDaPosicao / price).toFixed(0); 
+        } else if (symbol.includes('ZEC')) {
+            // AJUSTE EXCLUSIVO PARA ZEC: Dividindo por 10 para compensar o multiplicador do contrato
+            size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
+        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
+        } else { 
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         }
 
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${await getAvailableBalance()} USDT`);
+        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
+        const availableBalance = await getAvailableBalance();
+
+        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
-        // Verifica se o saldo é suficiente antes de tentar abrir a ordem
-        const availableBalance = await getAvailableBalance();
+        // Verifica se o saldo é suficiente usando a variável já salva
         if (availableBalance < margemDesejada) {
-            throw new Error(`Saldo insuficiente na conta de futuros da Bitget para abrir a posição. Saldo disponível: ${availableBalance} USDT, Margem necessária: ${margemDesejada} USDT.`);
+            throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
         }
 
-        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL A MERCADO ---
+        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
+            marginMode: 'isolated', 
             marginCoin: 'USDT',
-            size: size.toString(), // Tamanho da ordem (quantidade de contratos)
-            side: side, // buy ou sell
-            tradeSide: 'open', // open para abrir nova posição
-            orderType: 'market', // Ordem a mercado
-            force: 'true' // Força a ordem, se necessário
+            size: size.toString(), 
+            side: side, 
+            tradeSide: 'open', 
+            orderType: 'market' 
         };
         console.log('[BOT] Enviando ordem principal a mercado:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
@@ -202,7 +206,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- AGUARDA 5 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
         console.log('[BOT] Aguardando 5 segundos para sincronização da posição na Bitget...');
-        await sleep(5000); // Aumentado para 5 segundos
+        await sleep(5000); 
 
         // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
@@ -221,22 +225,20 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let recalculatedTakeProfit;
         let recalculatedStopLoss;
 
-        // slPct e tpPct já vêm como números (ex: 1.54, 2.31, sempre positivos representando a magnitude)
         if (action === 'buy') { // LONG
             recalculatedTakeProfit = realEntryPrice * (1 + (tpPct / 100));
-            recalculatedStopLoss = realEntryPrice * (1 - (slPct / 100)); // SL para LONG é ABAIXO do preço de entrada
+            recalculatedStopLoss = realEntryPrice * (1 - (slPct / 100)); 
         } else { // SHORT
-            recalculatedTakeProfit = realEntryPrice * (1 - (tpPct / 100)); // TP para SHORT é ABAIXO do preço de entrada
-            recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); // SL para SHORT é ACIMA do preço de entrada
+            recalculatedTakeProfit = realEntryPrice * (1 - (tpPct / 100)); 
+            recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); 
         }
 
-        // Determinar a precisão para arredondamento (ajuste conforme a Bitget aceita para cada par)
-        let precision = 2; // Padrão para USDT
+        let precision = 2; 
         if (symbol.includes('BTC')) precision = 1; 
         else if (symbol.includes('ETH')) precision = 2; 
         else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; 
-        else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ICP') || symbol.includes('ZEC')) precision = 2; // Para esses, 2 casas decimais para preço
-        else if (symbol.includes('BGB')) precision = 4; // BGB também precisa de mais precisão
+        else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ICP') || symbol.includes('ZEC')) precision = 2; 
+        else if (symbol.includes('BGB')) precision = 4; 
 
         recalculatedTakeProfit = parseFloat(recalculatedTakeProfit).toFixed(precision);
         recalculatedStopLoss = parseFloat(recalculatedStopLoss).toFixed(precision);
@@ -251,10 +253,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
                 productType: 'USDT-FUTURES',
                 marginCoin: 'USDT', 
                 holdSide: holdSide,
-                // Take Profit (usando o valor recalculado)
                 stopSurplusTriggerPrice: recalculatedTakeProfit.toString(),
                 stopSurplusTriggerType: 'mark_price',
-                // Stop Loss (usando o valor recalculado)
                 stopLossTriggerPrice: recalculatedStopLoss.toString(),
                 stopLossTriggerType: 'mark_price',
             };
@@ -290,14 +290,12 @@ const handleSignal = async (body) => {
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
-        // 1. ENVIA A MENSAGEM PARA O TELEGRAM PRIMEIRO
-        // Usar os valores de TP/SL do JSON original, pois o recálculo ocorre APÓS o envio da mensagem
         const telegramMsg =
             `${emoji} *SINAL DE ${tipo}*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
-            `⚙️ *Alavancagem:* 10x\n\n` + // A alavancagem aqui é apenas informativa, o bot ajusta dinamicamente
+            `⚙️ *Alavancagem:* 10x\n\n` + 
             `💰 *Entrada:* \`${price}\`\n` +
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
@@ -309,7 +307,6 @@ const handleSignal = async (body) => {
         await bot.sendMessage(telegramChatId, telegramMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         console.log('[BOT] Telegram de entrada enviado para o grupo VIP');
 
-        // 2. VERIFICA A BITGET DEPOIS DE ENVIAR O SINAL
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
@@ -317,22 +314,15 @@ const handleSignal = async (body) => {
             return;
         }
 
-        // 3. COLOCA A ORDEM NA BITGET E SETA TP/SL
-        // Passa slPct e tpPct para a função placeOrder
         await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
         console.log('[BOT] Operação concluída com sucesso!');
 
-        // Esta mensagem só será enviada se a ordem for de fato executada e o TP/SL configurado
-        // Se a verificação de saldo falhar, a função placeOrder retornará antes de chegar aqui.
-        if (await getOpenPositions(normalizedSymbol)) { // Verifica se a posição foi aberta com sucesso
+        if (await getOpenPositions(normalizedSymbol)) { 
             await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
         }
 
-
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
-        // Esta mensagem de erro crítico será enviada se houver um erro APÓS a verificação de saldo,
-        // ou se a verificação de saldo em si falhar de alguma forma inesperada.
         await bot.sendMessage(telegramChatId, `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`, { parse_mode: 'Markdown' });
     }
 };
