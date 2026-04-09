@@ -96,7 +96,8 @@ const setLeverage = async (symbol, leverage, holdSide) => {
             symbol: symbol,
             marginCoin: 'USDT',
             leverage: leverage.toString(),
-            holdSide: holdSide
+            holdSide: holdSide,
+            productType: 'USDT-FUTURES' // <<< ADICIONADO AQUI
         });
         console.log('[BOT] Alavancagem configurada com sucesso!');
     } catch (error) {
@@ -119,12 +120,11 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let margemDesejada = 5; // Margem padrão de $5 USD
 
         // Ajusta a margem desejada para moedas de baixo/médio valor
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) { 
-            margemDesejada = 30; // Aumenta para $30 USD de margem para moedas muito baratas
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) { 
-            margemDesejada = 15; // Aumenta para $15 USD de margem para moedas de preço médio
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
+            margemDesejada = 10; // <<< REDUZIDO PARA $10 USD de margem para moedas muito baratas
+        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) {
+            margemDesejada = 15; // $15 USD para esses ativos
         }
-        // Para BGBUSDT, se for operado, ele se encaixaria na primeira condição (margemDesejada = 30)
 
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
 
@@ -134,9 +134,9 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) { 
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) { // <<< ADICIONADO DOT AQUI
             size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para 0 casas decimais (inteiro)
-        } else { // Para ICP, DOT, AVAX, ZEC, SOL e outros que não se encaixam acima
+        } else { // Para ICP, AVAX, ZEC, SOL e outros que não se encaixam acima
             size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para outras moedas
         }
 
@@ -148,7 +148,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             productType: 'USDT-FUTURES',
             marginMode: 'isolated',
             marginCoin: 'USDT',
-            size: size,
+            size: size, // Certifique-se que 'size' é uma string
             side: side,
             tradeSide: 'open',
             orderType: 'market'
@@ -194,7 +194,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         else if (symbol.includes('ETH')) precision = 2; 
         else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; 
         else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ICP') || symbol.includes('ZEC')) precision = 2; // Para esses, 2 casas decimais para preço
-        // Se BGBUSDT for operado, ele provavelmente precisaria de precision = 4
+        else if (symbol.includes('BGB')) precision = 4; // BGB também precisa de mais precisão
 
         recalculatedTakeProfit = parseFloat(recalculatedTakeProfit).toFixed(precision);
         recalculatedStopLoss = parseFloat(recalculatedStopLoss).toFixed(precision);
@@ -272,7 +272,7 @@ const handleSignal = async (body) => {
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
-            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posiçãão aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
             return;
         }
 
