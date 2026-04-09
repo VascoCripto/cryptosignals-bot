@@ -206,8 +206,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             orderType: 'market',
             size: size.toString(),
             productType: 'USDT-FUTURES',
-            tradeMode: 'isolated', 
-            marginMode: 'isolated', // <-- LINHA ADICIONADA PARA CORRIGIR O ERRO 400172
+            // tradeMode: 'isolated', // <-- ESTA LINHA FOI REMOVIDA
+            marginMode: 'isolated', 
             timeInForce: 'GTC'
         };
 
@@ -291,7 +291,7 @@ const handleSignal = async (body) => {
 
         const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
 
-        if (!action || !symbol || !!price || !stopLoss || !takeProfit || slPct === undefined || tpPct === undefined) {
+        if (!action || !symbol || !price || !stopLoss || !takeProfit || slPct === undefined || tpPct === undefined) {
             console.error('[BOT] Erro: Sinal JSON incompleto ou inválido. Certifique-se de que slPct e tpPct estão presentes.');
             return;
         }
