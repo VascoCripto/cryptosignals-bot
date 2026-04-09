@@ -58,6 +58,23 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
+// NOVA FUNÇÃO: Obter saldo disponível na conta de futuros
+const getAvailableBalance = async () => {
+    try {
+        const response = await bitgetRequest('GET', '/api/v2/mix/account/account-list?productType=USDT-FUTURES');
+        if (response && response.data && response.data.length > 0) {
+            const usdtAccount = response.data.find(acc => acc.marginCoin === 'USDT');
+            if (usdtAccount) {
+                return parseFloat(usdtAccount.available);
+            }
+        }
+        return 0; // Retorna 0 se não encontrar saldo USDT ou dados
+    } catch (error) {
+        console.error('[BOT] Erro ao obter saldo disponível:', error.message);
+        return 0;
+    }
+};
+
 // Função para verificar posições abertas (retorna true/false)
 const getOpenPositions = async (symbol) => {
     try {
@@ -116,7 +133,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let alavancagem = 10; // Alavancagem padrão
 
         // Ajusta a alavancagem para moedas de baixo valor
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) { // ZEC adicionado aqui
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
         }
         await setLeverage(symbol, alavancagem, holdSide);
@@ -129,11 +146,9 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             margemDesejada = 5; // $5 USD de margem para XRP, ADA, DOGE
         } else if (symbol.includes('BGB')) { // CONDIÇÃO ESPECÍFICA PARA BGB
             margemDesejada = 10; // $10 USD de margem para BGB
-        } else if (symbol.includes('ICP')) { // CONDIÇÃO ESPECÍFICA PARA ICP
-            margemDesejada = 5; // $5 USD de margem para ICP
-        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC
-            margemDesejada = 5; // $5 USD de margem para ZEC
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) { // ZEC removido daqui
+        } else if (symbol.includes('ICP') || symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ICP e ZEC
+            margemDesejada = 10; // $10 USD de margem para ICP e ZEC
+        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
 
@@ -152,6 +167,19 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         }
 
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
+
+        // --- NOVA VERIFICAÇÃO DE SALDO ANTES DE ABRIR A ORDEM ---
+        const availableBalance = await getAvailableBalance();
+        console.log(`[BOT] Saldo disponível na Bitget: ${availableBalance} USDT`);
+
+        if (availableBalance < margemDesejada) {
+            const errorMessage = `❌ *Alerta de Saldo:* Saldo insuficiente para abrir posição em ${symbol}.\n` +
+                                 `Necessário: ${margemDesejada} USDT | Disponível: ${availableBalance.toFixed(2)} USDT.\n` +
+                                 `Por favor, adicione fundos à sua conta de futuros da Bitget.`;
+            await bot.sendMessage(telegramChatId, errorMessage, { parse_mode: 'Markdown' });
+            console.error(`[BOT] Saldo insuficiente para ${symbol}. Ordem não será executada.`);
+            return; // Interrompe a execução da ordem
+        }
 
         // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
         const orderData = {
@@ -292,10 +320,17 @@ const handleSignal = async (body) => {
         await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
         console.log('[BOT] Operação concluída com sucesso!');
 
-        await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
+        // Esta mensagem só será enviada se a ordem for de fato executada e o TP/SL configurado
+        // Se a verificação de saldo falhar, a função placeOrder retornará antes de chegar aqui.
+        if (await getOpenPositions(normalizedSymbol)) { // Verifica se a posição foi aberta com sucesso
+            await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
+        }
+
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
+        // Esta mensagem de erro crítico será enviada se houver um erro APÓS a verificação de saldo,
+        // ou se a verificação de saldo em si falhar de alguma forma inesperada.
         await bot.sendMessage(telegramChatId, `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`, { parse_mode: 'Markdown' });
     }
 };
