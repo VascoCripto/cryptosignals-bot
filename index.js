@@ -61,10 +61,8 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
 // FUNÇÃO ATUALIZADA: Obter saldo disponível na conta de futuros
 const getAvailableBalance = async () => {
     try {
-        // Endpoint que comprovadamente funciona para listar todos os saldos de conta
         const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
         if (response && response.data && Array.isArray(response.data)) {
-            // Filtrar para encontrar a conta de futuros
             const futuresAccount = response.data.find(acc => acc.accountType === 'futures');
             if (futuresAccount && futuresAccount.usdtBalance !== undefined) {
                 console.log('[BOT] Detalhes completos da conta de futuros encontrados:', JSON.stringify(futuresAccount, null, 2));
@@ -94,12 +92,11 @@ const getOpenPositions = async (symbol) => {
     }
 };
 
-// Função para obter os detalhes de uma posição aberta específica, incluindo o preço de entrada
+// Função para obter os detalhes de uma posição aberta específica
 const getPositionDetails = async (symbol, holdSide) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
         if (response && response.data && response.data.length > 0) {
-            // Filtra pela moeda e pelo lado da posição (long/short)
             const position = response.data.find(pos => pos.symbol === symbol && pos.holdSide === holdSide && parseFloat(pos.total) > 0);
             return position;
         }
@@ -133,27 +130,19 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const holdSide = action === 'buy' ? 'long' : 'short';
 
         // --- 1. FORÇA A ALAVANCAGEM ---
-        let alavancagem = 10; // Alavancagem padrão
-
-        // Ajusta a alavancagem para moedas de baixo valor
+        let alavancagem = 10; 
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
-            alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
+            alavancagem = 5; 
         } else if (symbol.includes('ZEC')) { 
-            alavancagem = 10; // Alavancagem padrão para ZEC
+            alavancagem = 10; 
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
         // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
-        let margemDesejada = 5; // Margem padrão de $5 USD
-
-        // Ajusta a margem desejada para moedas de baixo/médio valor
+        let margemDesejada = 5; 
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
             margemDesejada = 5; 
-        } else if (symbol.includes('BGB')) { 
-            margemDesejada = 10; 
-        } else if (symbol.includes('ICP')) { 
-            margemDesejada = 10; 
-        } else if (symbol.includes('ZEC')) { 
+        } else if (symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) { 
             margemDesejada = 10; 
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
             margemDesejada = 15; 
@@ -162,7 +151,6 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
 
         let size;
-        // Precisão do SIZE (quantidade de contratos)
         if (symbol.includes('BTC')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
@@ -170,7 +158,6 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(0); 
         } else if (symbol.includes('ZEC')) {
-            // AJUSTE EXCLUSIVO PARA ZEC: Dividindo por 10 para compensar o multiplicador do contrato
             size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
         } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
             size = (tamanhoTotalDaPosicao / price).toFixed(2); 
@@ -178,18 +165,16 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         }
 
-        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
         const availableBalance = await getAvailableBalance();
 
         console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
-        // Verifica se o saldo é suficiente usando a variável já salva
         if (availableBalance < margemDesejada) {
             throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
         }
 
-        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
+        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL (MODO UNILATERAL) ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -197,7 +182,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             marginCoin: 'USDT',
             size: size.toString(), 
             side: side, 
-            posSide: holdSide, // <--- SOLUÇÃO: Substitui o tradeSide pelo posSide para Hedge Mode
+            tradeSide: 'open', // <--- VOLTAMOS PARA O COMANDO DO MODO UNILATERAL
             orderType: 'market' 
         };
         console.log('[BOT] Enviando ordem principal a mercado:', orderData);
@@ -217,18 +202,14 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const realEntryPrice = parseFloat(positionDetails.openPriceAvg); 
         console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
 
-        // --- LOG DETALHADO PARA DEBUG DO TP/SL ---
-        console.log(`[BOT] slPct recebido do TradingView: ${slPct}%, tpPct recebido do TradingView: ${tpPct}%`);
-        console.log(`[BOT] realEntryPrice para cálculo de TP/SL: ${realEntryPrice}`);
-
         // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
         let recalculatedTakeProfit;
         let recalculatedStopLoss;
 
-        if (action === 'buy') { // LONG
+        if (action === 'buy') { 
             recalculatedTakeProfit = realEntryPrice * (1 + (tpPct / 100));
             recalculatedStopLoss = realEntryPrice * (1 - (slPct / 100)); 
-        } else { // SHORT
+        } else { 
             recalculatedTakeProfit = realEntryPrice * (1 - (tpPct / 100)); 
             recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); 
         }
@@ -236,7 +217,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let precision = 2; 
         if (symbol.includes('BTC')) precision = 1; 
         else if (symbol.includes('ETH')) precision = 2; 
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) precision = 4; // ICP movida para 4 casas decimais
+        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) precision = 4; 
         else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ZEC')) precision = 2; 
         else if (symbol.includes('BGB')) precision = 4; 
 
@@ -246,7 +227,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         console.log(`[BOT] TP recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedTakeProfit}`);
         console.log(`[BOT] SL recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedStopLoss}`);
 
-        // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA USANDO O ENDPOINT CORRETO ---
+        // --- 4. PASSO 2: GRAMPEAR O TP E SL NA POSIÇÃO ABERTA ---
         try {
             const posTpslData = {
                 symbol: symbol,
