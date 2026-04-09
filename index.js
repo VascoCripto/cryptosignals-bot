@@ -138,10 +138,10 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a alavancagem para moedas de baixo valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
-        } else if (symbol.includes('BTC') || symbol.includes('ETH')) {
-            alavancagem = 5; // Reduz alavancagem para 5x para BTC e ETH
         } else if (symbol.includes('ZEC')) { 
             alavancagem = 10; // Alavancagem padrão para ZEC
+        } else if (symbol.includes('BTC') || symbol.includes('ETH')) { // Adicionado BTC e ETH aqui
+            alavancagem = 5; // Reduz alavancagem para 5x para BTC e ETH
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
@@ -157,72 +157,63 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             margemDesejada = 10; 
         } else if (symbol.includes('ZEC')) { 
             margemDesejada = 10; 
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('BTC')) {
+        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('BTC')) { // Incluído BTC e ETH aqui
             margemDesejada = 15; 
         }
 
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
 
-        const availableBalance = await getAvailableBalance();
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
-        console.log(`[BOT] Margem desejada: ${margemDesejada} USD`);
-        console.log(`[BOT] Alavancagem: ${alavancagem}x`);
-        console.log(`[BOT] Tamanho total da posição: ${tamanhoTotalDaPosicao} USD`);
-
-        if (availableBalance < margemDesejada) {
-            throw new Error(`The order amount exceeds the balance. Saldo disponível: ${availableBalance} USDT, Margem necessária: ${margemDesejada} USD.`);
-        }
-
         let size;
+        // Precisão do SIZE (quantidade de contratos)
         if (symbol.includes('BTC')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(3);
+            size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(2);
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para o número inteiro mais próximo
+            size = (tamanhoTotalDaPosicao / price).toFixed(3); 
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
+            size = (tamanhoTotalDaPosicao / price).toFixed(0); 
         } else if (symbol.includes('ZEC')) {
             // AJUSTE EXCLUSIVO PARA ZEC: Dividindo por 10 para compensar o multiplicador do contrato
             size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
-        } else if (symbol.includes('BGB')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(4);
-        } else { // Para ICP, AVAX, DOT, SOL, BNB e outros
-            size = (tamanhoTotalDaPosicao / price).toFixed(2);
+        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
+        } else { 
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         }
 
-        // Garante que o size não seja zero se o cálculo resultar em um número muito pequeno
-        if (parseFloat(size) === 0) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(4); // Tenta mais precisão
-            if (parseFloat(size) === 0) {
-                size = (tamanhoTotalDaPosicao / price).toFixed(6); // Tenta ainda mais precisão
-            }
+        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
+        const availableBalance = await getAvailableBalance();
+        console.log('[BOT] Saldo disponível na Bitget (lido pelo bot):', availableBalance, 'USDT');
+        console.log('[BOT] Margem desejada:', margemDesejada, 'USD');
+        console.log('[BOT] Alavancagem:', alavancagem, 'x');
+        console.log('[BOT] Tamanho total da posição:', tamanhoTotalDaPosicao, 'USD');
+        console.log('[BOT] Size calculado:', size);
+
+        if (availableBalance < margemDesejada) {
+            throw new Error(`Saldo insuficiente. Necessário ${margemDesejada} USDT, disponível ${availableBalance} USDT.`);
         }
 
-        console.log(`[BOT] Size calculado: ${size}`);
-
+        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
         const orderData = {
             symbol: symbol,
-            marginCoin: 'USDT',
-            side: side,
-            orderType: 'market',
-            size: size.toString(),
             productType: 'USDT-FUTURES',
-            // tradeMode: 'isolated', // <-- ESTA LINHA FOI REMOVIDA
             marginMode: 'isolated', 
-            timeInForce: 'GTC'
+            marginCoin: 'USDT',
+            size: size.toString(), 
+            side: side, 
+            // tradeSide: 'open', // ESTA LINHA FOI REMOVIDA PARA CORRIGIR O ERRO 40774
+            orderType: 'market' 
         };
-
         console.log('[BOT] Enviando ordem para a Bitget:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Resposta da Bitget (ordem):', JSON.stringify(response));
+        console.log('[BOT] Ordem principal enviada com sucesso:', response);
 
-        // Aguarda um pouco para a posição ser registrada na Bitget
-        console.log('[BOT] Aguardando 5 segundos para sincronização da posição na Bitget...');
-        await sleep(5000); 
+        // --- 3.5. ESPERAR UM POUCO PARA A POSIÇÃO SER PROCESSADA ---
+        await sleep(2000); // Espera 2 segundos para a posição abrir
 
-        // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
+        // --- 4. PASSO 2: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
-        if (!positionDetails || !positionDetails.openPriceAvg) { 
-            console.error('[BOT] Erro: positionDetails ou openPriceAvg não encontrados. Detalhes da posição:', positionDetails);
+        if (!positionDetails || !positionDetails.openPriceAvg) {
+            console.error('[BOT] Detalhes da posição:', positionDetails);
             throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
         }
         const realEntryPrice = parseFloat(positionDetails.openPriceAvg); 
@@ -337,10 +328,12 @@ const handleSignal = async (body) => {
         let errorMessageForTelegram = `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`;
 
         // Verifica se o erro é de saldo insuficiente da Bitget
-        if (error.message.includes("The order amount exceeds the balance")) {
+        if (error.message.includes("Saldo insuficiente")) { // Alterado para a mensagem personalizada
             errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada por **saldo insuficiente** na sua conta de futuros da Bitget para cobrir a margem da operação. Por favor, verifique seu saldo.`;
-        } else if (error.message.includes("The margin mode cannot be empty")) { // Adicionado para o erro 400172
+        } else if (error.message.includes("The margin mode cannot be empty")) { 
             errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada devido a um problema na configuração do modo de margem na Bitget. Por favor, verifique as configurações da API ou entre em contato com o suporte.`;
+        } else if (error.message.includes("The order type for unilateral position must also be the unilateral position type.")) { // Adicionado para o erro 40774
+            errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada devido a um problema na configuração da posição na Bitget (modo unilateral). Por favor, verifique as configurações da API ou entre em contato com o suporte.`;
         }
         // Você pode adicionar outras condições 'else if' aqui para outros erros comuns, se quiser.
 
