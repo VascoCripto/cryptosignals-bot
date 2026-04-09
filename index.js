@@ -139,8 +139,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a alavancagem para moedas de baixo valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
-        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - ALAVANCAGEM AJUSTADA PARA 5X
-            alavancagem = 5; // Reduz alavancagem para 5x para ZEC
+        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - ALAVANCAGEM AJUSTADA PARA 10X
+            alavancagem = 10; // Alavancagem padrão para ZEC
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
@@ -176,33 +176,27 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão geral
         }
 
+        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${await getAvailableBalance()} USDT`);
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
-        // --- NOVA VERIFICAÇÃO DE SALDO ANTES DE ABRIR A ORDEM ---
+        // Verifica se o saldo é suficiente antes de tentar abrir a ordem
         const availableBalance = await getAvailableBalance();
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
-
         if (availableBalance < margemDesejada) {
-            const errorMessage = `❌ *Alerta de Saldo:* Saldo insuficiente para abrir posição em ${symbol}.\n` +
-                                 `Necessário: ${margemDesejada} USDT | Disponível: ${availableBalance.toFixed(2)} USDT.\n` +
-                                 `Por favor, adicione fundos à sua conta de futuros da Bitget.`;
-            await bot.sendMessage(telegramChatId, errorMessage, { parse_mode: 'Markdown' });
-            console.error(`[BOT] Saldo insuficiente para ${symbol}. Ordem não será executada.`);
-            return; // Interrompe a execução da ordem
+            throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
         }
 
-        // --- 3. PASSO 1: ABRIR A POSIÇÃO A MERCADO ---
+        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
-            marginMode: 'isolated',
+            marginMode: 'isolated', // Modo de margem isolada
             marginCoin: 'USDT',
-            size: size, // Certifique-se que 'size' é uma string
-            side: side,
-            tradeSide: 'open',
-            orderType: 'market'
+            size: size.toString(), // Tamanho da ordem (quantidade de contratos)
+            side: side, // buy ou sell
+            tradeSide: 'open', // open para abrir nova posição
+            orderType: 'market', // Ordem a mercado
+            force: 'true' // Força a ordem, se necessário
         };
-
         console.log('[BOT] Enviando ordem principal a mercado:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         console.log('[BOT] Ordem principal executada com sucesso!');
