@@ -65,9 +65,13 @@ const getAvailableBalance = async () => {
         if (response && response.data && response.data.length > 0) {
             const usdtAccount = response.data.find(acc => acc.marginCoin === 'USDT');
             if (usdtAccount) {
-                return parseFloat(usdtAccount.available);
+                // --- ADIÇÃO DE LOG PARA DEBUG ---
+                console.log('[BOT] Detalhes completos da conta USDT-FUTURES encontrados:', JSON.stringify(usdtAccount, null, 2));
+                // --- FIM DA ADIÇÃO DE LOG ---
+                return parseFloat(usdtAccount.available); // Mantemos 'available' por enquanto para ver o que o log mostra
             }
         }
+        console.log('[BOT] Nenhuma conta USDT-FUTURES encontrada ou saldo zero.');
         return 0; // Retorna 0 se não encontrar saldo USDT ou dados
     } catch (error) {
         console.error('[BOT] Erro ao obter saldo disponível:', error.message);
@@ -170,7 +174,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- NOVA VERIFICAÇÃO DE SALDO ANTES DE ABRIR A ORDEM ---
         const availableBalance = await getAvailableBalance();
-        console.log(`[BOT] Saldo disponível na Bitget: ${availableBalance} USDT`);
+        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
 
         if (availableBalance < margemDesejada) {
             const errorMessage = `❌ *Alerta de Saldo:* Saldo insuficiente para abrir posição em ${symbol}.\n` +
