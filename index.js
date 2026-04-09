@@ -206,7 +206,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             orderType: 'market',
             size: size.toString(),
             productType: 'USDT-FUTURES',
-            tradeMode: 'isolated', // Modo isolado
+            tradeMode: 'isolated', 
+            marginMode: 'isolated', // <-- LINHA ADICIONADA PARA CORRIGIR O ERRO 400172
             timeInForce: 'GTC'
         };
 
@@ -290,7 +291,7 @@ const handleSignal = async (body) => {
 
         const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
 
-        if (!action || !symbol || !price || !stopLoss || !takeProfit || slPct === undefined || tpPct === undefined) {
+        if (!action || !symbol || !!price || !stopLoss || !takeProfit || slPct === undefined || tpPct === undefined) {
             console.error('[BOT] Erro: Sinal JSON incompleto ou inválido. Certifique-se de que slPct e tpPct estão presentes.');
             return;
         }
@@ -338,6 +339,8 @@ const handleSignal = async (body) => {
         // Verifica se o erro é de saldo insuficiente da Bitget
         if (error.message.includes("The order amount exceeds the balance")) {
             errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada por **saldo insuficiente** na sua conta de futuros da Bitget para cobrir a margem da operação. Por favor, verifique seu saldo.`;
+        } else if (error.message.includes("The margin mode cannot be empty")) { // Adicionado para o erro 400172
+            errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada devido a um problema na configuração do modo de margem na Bitget. Por favor, verifique as configurações da API ou entre em contato com o suporte.`;
         }
         // Você pode adicionar outras condições 'else if' aqui para outros erros comuns, se quiser.
 
