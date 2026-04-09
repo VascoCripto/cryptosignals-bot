@@ -150,8 +150,10 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             margemDesejada = 5; // $5 USD de margem para XRP, ADA, DOGE
         } else if (symbol.includes('BGB')) { // CONDIÇÃO ESPECÍFICA PARA BGB
             margemDesejada = 10; // $10 USD de margem para BGB
-        } else if (symbol.includes('ICP') || symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ICP e ZEC
-            margemDesejada = 10; // $10 USD de margem para ICP e ZEC
+        } else if (symbol.includes('ICP')) { // CONDIÇÃO ESPECÍFICA PARA ICP
+            margemDesejada = 10; // $10 USD de margem para ICP
+        } else if (symbol.includes('ZEC')) { // CONDIÇÃO ESPECÍFICA PARA ZEC - AJUSTADO PARA 3 USD
+            margemDesejada = 3; // $3 USD de margem para ZEC (tentativa de contornar o erro de saldo)
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
