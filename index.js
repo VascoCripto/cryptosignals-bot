@@ -11,8 +11,7 @@ app.use(bodyParser.json());
 // Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID; // GRUPO VIP (Apenas Sinais)
-// GRUPO ADMIN (Avisos, Erros, Confirmações). Se não existir, manda pro VIP por segurança.
-const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId; 
+const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId; // GRUPO ADMIN
 const bot = new TelegramBot(telegramToken, { polling: false });
 
 // Configurações da Bitget
@@ -198,6 +197,9 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 // Função principal para lidar com os sinais
 const handleSignal = async (body) => {
     let normalizedSymbol = '';
+    let signalDetails = ''; // Variável para guardar os detalhes e usar no catch
+    let tipo = '';
+
     try {
         const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
 
@@ -206,14 +208,12 @@ const handleSignal = async (body) => {
         }
 
         normalizedSymbol = symbol.replace('_', '').toUpperCase();
-        const tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
+        tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
-        // MENSAGEM DE SINAL (VAI PARA O GRUPO VIP)
-        const telegramMsg =
-            `${emoji} *SINAL DE ${tipo}*\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
+        // BLOCO DE DETALHES (Usado tanto no VIP quanto no Admin)
+        signalDetails =
             `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
             `⚙️ *Alavancagem:* 10x\n\n` + 
@@ -221,41 +221,68 @@ const handleSignal = async (body) => {
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
             `📊 *Placar Geral:* ${wins}W - ${losses}L (${winRate}%)\n` +
-            `🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n` +
+            `🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n`;
+
+        // 1. MENSAGEM VIP (Sinal Limpo)
+        const vipMsg =
+            `${emoji} *SINAL DE ${tipo}*\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            signalDetails +
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `_Sinal gerado por IA_`;
 
-        await bot.sendMessage(telegramChatId, telegramMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+        await bot.sendMessage(telegramChatId, vipMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
 
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
-            // AVISO DE POSIÇÃO ABERTA (VAI PARA O GRUPO ADMIN)
-            await bot.sendMessage(telegramAdminChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            // 2. AVISO ADMIN: Posição já aberta
+            const adminMsg = 
+                `⚠️ *SINAL IGNORADO (POSIÇÃO ABERTA)*\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                signalDetails +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `_Motivo: Já existe uma operação em andamento para este par._`;
+            await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
             return;
         }
 
         await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
 
         if (await getOpenPositions(normalizedSymbol)) { 
-            // CONFIRMAÇÃO DE SUCESSO (VAI PARA O GRUPO ADMIN)
-            await bot.sendMessage(telegramAdminChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
+            // 3. AVISO ADMIN: Sucesso
+            const adminMsg = 
+                `✅ *ORDEM EXECUTADA COM SUCESSO*\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                signalDetails +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `_Status: Ordem automática protegida com TP/SL!_`;
+            await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         }
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
 
-        // AVISOS DE ERRO E SALDO (VÃO PARA O GRUPO ADMIN)
+        // Fallback caso o erro ocorra antes de preencher os detalhes
+        const fallbackDetails = signalDetails || `📌 *Par:* ${normalizedSymbol || 'Desconhecido'}\n`;
+
         if (error.message.includes('40762') || error.message.includes('exceeds the balance') || error.message.includes('Saldo insuficiente')) {
-            const msgSaldo = 
-                `⚠️ *Aviso de Saldo*\n` +
+            // 4. AVISO ADMIN: Erro de Saldo
+            const adminMsg = 
+                `⚠️ *ERRO: SALDO INSUFICIENTE*\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
-                `A operação para **${normalizedSymbol || 'o ativo'}** não pôde ser aberta.\n\n` +
-                `**Motivo:** Saldo insuficiente na corretora.\n` +
-                `_Por favor, adicione fundos à sua conta de futuros da Bitget para continuar operando._\n` +
-                `━━━━━━━━━━━━━━━━━━━━`;
-            await bot.sendMessage(telegramAdminChatId, msgSaldo, { parse_mode: 'Markdown' });
+                fallbackDetails +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `_Motivo: O valor da ordem excede seu saldo disponível na Bitget._`;
+            await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         } else {
-            await bot.sendMessage(telegramAdminChatId, `❌ *Aviso:* Não foi possível executar a ordem de ${normalizedSymbol || 'ativo'}. Motivo: ${error.message}`, { parse_mode: 'Markdown' });
+            // 5. AVISO ADMIN: Erro Genérico (ex: TP/SL recusado)
+            const adminMsg = 
+                `❌ *ERRO AO EXECUTAR ORDEM*\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                fallbackDetails +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `_Motivo: ${error.message}_`;
+            await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         }
     }
 };
