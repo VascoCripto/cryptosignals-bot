@@ -126,7 +126,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // Ajusta a margem desejada para moedas de baixo/médio valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
-            margemDesejada = 20; // <<< AUMENTADO PARA $20 USD de margem para moedas muito baratas
+            margemDesejada = 5; // <<< REDUZIDO PARA $5 USD de margem para moedas muito baratas
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
