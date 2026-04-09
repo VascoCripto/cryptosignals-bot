@@ -184,6 +184,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
         } catch (errPosTpsl) {
             console.error('[BOT] Erro ao configurar TP/SL:', errPosTpsl.message);
+            // AGORA ELE GERA UM ERRO REAL SE O TP/SL FALHAR
+            throw new Error(`A ordem foi aberta, mas a Bitget recusou o TP/SL. Motivo: ${errPosTpsl.message}`);
         }
 
         return response;
@@ -238,8 +240,6 @@ const handleSignal = async (body) => {
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
 
-        // --- NOVA VERIFICAÇÃO DE SALDO ---
-        // Captura o erro 40762 da Bitget ou a nossa própria mensagem de saldo
         if (error.message.includes('40762') || error.message.includes('exceeds the balance') || error.message.includes('Saldo insuficiente')) {
             const msgSaldo = 
                 `⚠️ *Aviso de Saldo*\n` +
