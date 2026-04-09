@@ -138,6 +138,8 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a alavancagem para moedas de baixo valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
+        } else if (symbol.includes('BTC') || symbol.includes('ETH')) {
+            alavancagem = 5; // Reduz alavancagem para 5x para BTC e ETH
         } else if (symbol.includes('ZEC')) { 
             alavancagem = 10; // Alavancagem padrão para ZEC
         }
@@ -155,56 +157,64 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             margemDesejada = 10; 
         } else if (symbol.includes('ZEC')) { 
             margemDesejada = 10; 
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH')) {
+        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('BTC')) {
             margemDesejada = 15; 
         }
 
         const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
 
+        const availableBalance = await getAvailableBalance();
+        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
+        console.log(`[BOT] Margem desejada: ${margemDesejada} USD`);
+        console.log(`[BOT] Alavancagem: ${alavancagem}x`);
+        console.log(`[BOT] Tamanho total da posição: ${tamanhoTotalDaPosicao} USD`);
+
+        if (availableBalance < margemDesejada) {
+            throw new Error(`The order amount exceeds the balance. Saldo disponível: ${availableBalance} USDT, Margem necessária: ${margemDesejada} USD.`);
+        }
+
         let size;
-        // Precisão do SIZE (quantidade de contratos)
         if (symbol.includes('BTC')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(4); 
+            size = (tamanhoTotalDaPosicao / price).toFixed(3);
         } else if (symbol.includes('ETH')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(0); 
+            size = (tamanhoTotalDaPosicao / price).toFixed(2);
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
+            size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para o número inteiro mais próximo
         } else if (symbol.includes('ZEC')) {
             // AJUSTE EXCLUSIVO PARA ZEC: Dividindo por 10 para compensar o multiplicador do contrato
             size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
-        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
-        } else { 
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
+        } else if (symbol.includes('BGB')) {
+            size = (tamanhoTotalDaPosicao / price).toFixed(4);
+        } else { // Para ICP, AVAX, DOT, SOL, BNB e outros
+            size = (tamanhoTotalDaPosicao / price).toFixed(2);
         }
 
-        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
-        const availableBalance = await getAvailableBalance();
-
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
-        console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
-
-        // Verifica se o saldo é suficiente usando a variável já salva
-        if (availableBalance < margemDesejada) {
-            throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
+        // Garante que o size não seja zero se o cálculo resultar em um número muito pequeno
+        if (parseFloat(size) === 0) {
+            size = (tamanhoTotalDaPosicao / price).toFixed(4); // Tenta mais precisão
+            if (parseFloat(size) === 0) {
+                size = (tamanhoTotalDaPosicao / price).toFixed(6); // Tenta ainda mais precisão
+            }
         }
 
-        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
+        console.log(`[BOT] Size calculado: ${size}`);
+
         const orderData = {
             symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginMode: 'isolated', 
             marginCoin: 'USDT',
-            size: size.toString(), 
-            side: side, 
-            tradeSide: 'open', 
-            orderType: 'market' 
+            side: side,
+            orderType: 'market',
+            size: size.toString(),
+            productType: 'USDT-FUTURES',
+            tradeMode: 'isolated', // Modo isolado
+            timeInForce: 'GTC'
         };
-        console.log('[BOT] Enviando ordem principal a mercado:', orderData);
-        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Ordem principal executada com sucesso!');
 
-        // --- AGUARDA 5 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
+        console.log('[BOT] Enviando ordem para a Bitget:', orderData);
+        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        console.log('[BOT] Resposta da Bitget (ordem):', JSON.stringify(response));
+
+        // Aguarda um pouco para a posição ser registrada na Bitget
         console.log('[BOT] Aguardando 5 segundos para sincronização da posição na Bitget...');
         await sleep(5000); 
 
@@ -323,7 +333,15 @@ const handleSignal = async (body) => {
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
-        await bot.sendMessage(telegramChatId, `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`, { parse_mode: 'Markdown' });
+        let errorMessageForTelegram = `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`;
+
+        // Verifica se o erro é de saldo insuficiente da Bitget
+        if (error.message.includes("The order amount exceeds the balance")) {
+            errorMessageForTelegram = `⚠️ *Aviso do Bot:* A entrada para este ativo não pôde ser realizada por **saldo insuficiente** na sua conta de futuros da Bitget para cobrir a margem da operação. Por favor, verifique seu saldo.`;
+        }
+        // Você pode adicionar outras condições 'else if' aqui para outros erros comuns, se quiser.
+
+        await bot.sendMessage(telegramChatId, errorMessageForTelegram, { parse_mode: 'Markdown' });
     }
 };
 
