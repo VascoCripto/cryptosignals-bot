@@ -168,10 +168,12 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT') || symbol.includes('ZEC')) { // ZEC adicionado aqui para arredondar para inteiro
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para 0 casas decimais (inteiro)
-        } else { // Para ICP, AVAX, SOL e outros que não se encaixam acima
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para outras moedas
+        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ZEC')) { // ZEC adicionado aqui para 2 casas decimais
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para essas moedas
+        } else { // Para outros que não se encaixam acima
+            size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão geral
         }
 
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
