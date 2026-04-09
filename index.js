@@ -116,7 +116,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let alavancagem = 10; // Alavancagem padrão
 
         // Ajusta a alavancagem para moedas de baixo valor
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) { // ICP adicionado aqui
             alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
         }
         await setLeverage(symbol, alavancagem, holdSide);
@@ -127,9 +127,11 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a margem desejada para moedas de baixo/médio valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
             margemDesejada = 5; // $5 USD de margem para XRP, ADA, DOGE
-        } else if (symbol.includes('BGB')) { // <<< CONDIÇÃO ESPECÍFICA PARA BGB
-            margemDesejada = 10; // <<< $10 USD de margem para BGB
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) {
+        } else if (symbol.includes('BGB')) { // CONDIÇÃO ESPECÍFICA PARA BGB
+            margemDesejada = 10; // $10 USD de margem para BGB
+        } else if (symbol.includes('ICP')) { // CONDIÇÃO ESPECÍFICA PARA ICP
+            margemDesejada = 5; // $5 USD de margem para ICP
+        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ZEC')) { // ICP removido daqui
             margemDesejada = 15; // $15 USD para esses ativos
         }
 
