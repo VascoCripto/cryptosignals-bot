@@ -131,6 +131,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
     try {
         const side = action === 'buy' ? 'buy' : 'sell';
         const holdSide = action === 'buy' ? 'long' : 'short';
+        const posSide = action === 'buy' ? 'long' : 'short'; // Definindo posSide
 
         // --- 1. FORÇA A ALAVANCAGEM ---
         let alavancagem = 10; // Alavancagem padrão
@@ -151,99 +152,64 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         // Ajusta a margem desejada para moedas de baixo/médio valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
             margemDesejada = 5; 
-        } else if (symbol.includes('BGB')) { 
-            margemDesejada = 10; 
-        } else if (symbol.includes('ICP')) { 
-            margemDesejada = 10; 
-        } else if (symbol.includes('ZEC')) { 
-            margemDesejada = 10; 
-        } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('BTC')) { // Incluído BTC e ETH aqui
-            margemDesejada = 15; 
+        } else if (symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) {
+            margemDesejada = 10;
+        } else if (symbol.includes('BTC') || symbol.includes('ETH')) {
+            margemDesejada = 15; // Aumenta a margem para BTC e ETH
+        } else {
+            margemDesejada = 10; // Padrão para outros ativos
         }
 
-        const tamanhoTotalDaPosicao = margemDesejada * alavancagem; 
-
-        let size;
-        // Precisão do SIZE (quantidade de contratos)
-        if (symbol.includes('BTC')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(4); 
-        } else if (symbol.includes('ETH')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
-            size = (tamanhoTotalDaPosicao / price).toFixed(0); 
-        } else if (symbol.includes('ZEC')) {
-            // AJUSTE EXCLUSIVO PARA ZEC: Dividindo por 10 para compensar o multiplicador do contrato
-            size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
-        } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
-        } else { 
-            size = (tamanhoTotalDaPosicao / price).toFixed(2); 
-        }
-
-        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
         const availableBalance = await getAvailableBalance();
         console.log('[BOT] Saldo disponível na Bitget (lido pelo bot):', availableBalance, 'USDT');
         console.log('[BOT] Margem desejada:', margemDesejada, 'USD');
-        console.log('[BOT] Alavancagem:', alavancagem, 'x');
-        console.log('[BOT] Tamanho total da posição:', tamanhoTotalDaPosicao, 'USD');
-        console.log('[BOT] Size calculado:', size);
 
         if (availableBalance < margemDesejada) {
-            throw new Error(`Saldo insuficiente. Necessário ${margemDesejada} USDT, disponível ${availableBalance} USDT.`);
+            throw new Error(`Saldo insuficiente. Saldo disponível: ${availableBalance} USDT. Margem necessária: ${margemDesejada} USDT.`);
         }
 
-        // --- 3. PASSO 1: ENVIAR A ORDEM PRINCIPAL ---
+        const tamanhoTotalPosicao = margemDesejada * alavancagem;
+        console.log('[BOT] Alavancagem:', alavancagem + 'x');
+        console.log('[BOT] Tamanho total da posição:', tamanhoTotalPosicao, 'USD');
+
+        // Calcula o 'size' (quantidade de contratos)
+        // size = (margem desejada * alavancagem) / preço_atual
+        const size = (tamanhoTotalPosicao / price).toFixed(3); // Ajuste para 3 casas decimais, pode precisar de mais dependendo do ativo
+        console.log('[BOT] Size calculado:', size);
+
+        // --- 3. PASSO 1: ENVIAR A ORDEM DE MERCADO ---
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
-            marginMode: 'isolated', 
+            marginMode: 'isolated',
             marginCoin: 'USDT',
             size: size.toString(), 
             side: side, 
-            // tradeSide: 'open', // ESTA LINHA FOI REMOVIDA PARA CORRIGIR O ERRO 40774
-            orderType: 'market' 
+            orderType: 'market',
+            posSide: posSide // <-- ADICIONADO ESTA LINHA
         };
         console.log('[BOT] Enviando ordem para a Bitget:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        console.log('[BOT] Ordem principal enviada com sucesso:', response);
+        console.log('[BOT] Resposta da Bitget ao enviar ordem:', JSON.stringify(response));
 
-        // --- 3.5. ESPERAR UM POUCO PARA A POSIÇÃO SER PROCESSADA ---
-        await sleep(2000); // Espera 2 segundos para a posição abrir
+        // Aguarda um pouco para a ordem ser processada e a posição aparecer
+        await sleep(2000); 
 
-        // --- 4. PASSO 2: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
+        // --- 4. PASSO 2: OBTER O PREÇO DE ENTRADA REAL E CONFIGURAR TP/SL NA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
-        if (!positionDetails || !positionDetails.openPriceAvg) {
-            console.error('[BOT] Detalhes da posição:', positionDetails);
-            throw new Error('Não foi possível obter o preço de entrada real da posição na Bitget após a execução da ordem.');
+        if (!positionDetails) {
+            throw new Error('Não foi possível encontrar os detalhes da posição aberta para configurar TP/SL.');
         }
-        const realEntryPrice = parseFloat(positionDetails.openPriceAvg); 
-        console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
+        const realEntryPrice = parseFloat(positionDetails.averageOpenPrice);
+        console.log(`[BOT] Preço de entrada real da posição: ${realEntryPrice}`);
 
-        // --- LOG DETALHADO PARA DEBUG DO TP/SL ---
-        console.log(`[BOT] slPct recebido do TradingView: ${slPct}%, tpPct recebido do TradingView: ${tpPct}%`);
-        console.log(`[BOT] realEntryPrice para cálculo de TP/SL: ${realEntryPrice}`);
-
-        // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
-        let recalculatedTakeProfit;
-        let recalculatedStopLoss;
-
-        if (action === 'buy') { // LONG
-            recalculatedTakeProfit = realEntryPrice * (1 + (tpPct / 100));
-            recalculatedStopLoss = realEntryPrice * (1 - (slPct / 100)); 
-        } else { // SHORT
-            recalculatedTakeProfit = realEntryPrice * (1 - (tpPct / 100)); 
-            recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); 
-        }
-
-        let precision = 2; 
-        if (symbol.includes('BTC')) precision = 1; 
-        else if (symbol.includes('ETH')) precision = 2; 
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; 
-        else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ICP') || symbol.includes('ZEC')) precision = 2; 
-        else if (symbol.includes('BGB')) precision = 4; 
-
-        recalculatedTakeProfit = parseFloat(recalculatedTakeProfit).toFixed(precision);
-        recalculatedStopLoss = parseFloat(recalculatedStopLoss).toFixed(precision);
+        // Recalcula TP/SL com base no preço de entrada real
+        const recalculatedTakeProfit = action === 'buy' 
+            ? realEntryPrice * (1 + (tpPct / 100))
+            : realEntryPrice * (1 - (tpPct / 100));
+        const recalculatedStopLoss = action === 'buy' 
+            ? realEntryPrice * (1 - (slPct / 100))
+            : realEntryPrice * (1 + (slPct / 100));
 
         console.log(`[BOT] TP recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedTakeProfit}`);
         console.log(`[BOT] SL recalculado com base no preço de entrada real (${realEntryPrice}): ${recalculatedStopLoss}`);
@@ -312,7 +278,7 @@ const handleSignal = async (body) => {
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
-            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posiçãão aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
             return;
         }
 
