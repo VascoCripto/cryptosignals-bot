@@ -97,9 +97,9 @@ const setLeverage = async (symbol, leverage, holdSide) => {
             marginCoin: 'USDT',
             leverage: leverage.toString(),
             holdSide: holdSide,
-            productType: 'USDT-FUTURES' // <<< ADICIONADO AQUI
+            productType: 'USDT-FUTURES'
         });
-        console.log('[BOT] Alavancagem configurada com sucesso!');
+        console.log(`[BOT] Alavancagem configurada para ${leverage}x com sucesso!`);
     } catch (error) {
         console.log('[BOT] Aviso ao configurar alavancagem:', error.message);
     }
@@ -112,8 +112,13 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const side = action === 'buy' ? 'buy' : 'sell';
         const holdSide = action === 'buy' ? 'long' : 'short';
 
-        // --- 1. FORÇA A ALAVANCAGEM PARA 10X ---
-        const alavancagem = 10;
+        // --- 1. FORÇA A ALAVANCAGEM ---
+        let alavancagem = 10; // Alavancagem padrão
+
+        // Ajusta a alavancagem para moedas de baixo valor
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
+            alavancagem = 5; // <<< Reduz alavancagem para 5x para esses ativos
+        }
         await setLeverage(symbol, alavancagem, holdSide);
 
         // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
@@ -121,7 +126,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // Ajusta a margem desejada para moedas de baixo/médio valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
-            margemDesejada = 10; // <<< REDUZIDO PARA $10 USD de margem para moedas muito baratas
+            margemDesejada = 20; // <<< AUMENTADO PARA $20 USD de margem para moedas muito baratas
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
@@ -134,7 +139,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(4); 
         } else if (symbol.includes('ETH')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(3); 
-        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) { // <<< ADICIONADO DOT AQUI
+        } else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('DOT')) {
             size = (tamanhoTotalDaPosicao / price).toFixed(0); // Arredonda para 0 casas decimais (inteiro)
         } else { // Para ICP, AVAX, ZEC, SOL e outros que não se encaixam acima
             size = (tamanhoTotalDaPosicao / price).toFixed(2); // Padrão para outras moedas
@@ -255,7 +260,7 @@ const handleSignal = async (body) => {
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
-            `⚙️ *Alavancagem:* 10x\n\n` +
+            `⚙️ *Alavancagem:* 10x\n\n` + // A alavancagem aqui é apenas informativa, o bot ajusta dinamicamente
             `💰 *Entrada:* \`${price}\`\n` +
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
