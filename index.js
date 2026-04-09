@@ -178,11 +178,13 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         }
 
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${await getAvailableBalance()} USDT`);
+        // Chama a API apenas UMA vez e guarda o valor na variável para evitar Erro 429 (Too Many Requests)
+        const availableBalance = await getAvailableBalance();
+
+        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
         console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
-        // Verifica se o saldo é suficiente antes de tentar abrir a ordem
-        const availableBalance = await getAvailableBalance();
+        // Verifica se o saldo é suficiente usando a variável já salva
         if (availableBalance < margemDesejada) {
             throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
         }
@@ -197,7 +199,6 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             side: side, 
             tradeSide: 'open', 
             orderType: 'market' 
-            // O parâmetro 'force: true' foi removido daqui para evitar o erro 400172
         };
         console.log('[BOT] Enviando ordem principal a mercado:', orderData);
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
