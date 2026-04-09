@@ -61,17 +61,18 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
 // NOVA FUNÇÃO: Obter saldo disponível na conta de futuros
 const getAvailableBalance = async () => {
     try {
-        // Endpoint correto para obter informações da conta de futuros para um determinado marginCoin
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account-info?productType=USDT-FUTURES&marginCoin=USDT');
-        if (response && response.data) { // Para account-info, a resposta é um objeto direto, não uma lista
-            const usdtAccount = response.data; // O objeto data já é a conta USDT
-            // --- ADIÇÃO DE LOG PARA DEBUG ---
-            console.log('[BOT] Detalhes completos da conta USDT-FUTURES encontrados:', JSON.stringify(usdtAccount, null, 2));
-            // --- FIM DA ADIÇÃO DE LOG ---
-            return parseFloat(usdtAccount.available); // O campo 'available' deve estar aqui
+        // Endpoint para listar todas as contas (spot e futuros)
+        const response = await bitgetRequest('GET', '/api/v2/mix/account/account-list'); 
+        if (response && response.data && response.data.length > 0) {
+            // Filtrar para encontrar a conta USDT-FUTURES
+            const usdtFuturesAccount = response.data.find(acc => acc.productType === 'USDT-FUTURES' && acc.marginCoin === 'USDT');
+            if (usdtFuturesAccount) {
+                console.log('[BOT] Detalhes completos da conta USDT-FUTURES encontrados:', JSON.stringify(usdtFuturesAccount, null, 2));
+                return parseFloat(usdtFuturesAccount.available);
+            }
         }
         console.log('[BOT] Nenhuma conta USDT-FUTURES encontrada ou saldo zero.');
-        return 0; // Retorna 0 se não encontrar saldo USDT ou dados
+        return 0;
     } catch (error) {
         console.error('[BOT] Erro ao obter saldo disponível:', error.message);
         return 0;
