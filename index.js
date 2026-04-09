@@ -10,7 +10,9 @@ app.use(bodyParser.json());
 
 // Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+const telegramChatId = process.env.TELEGRAM_CHAT_ID; // GRUPO VIP (Apenas Sinais)
+// GRUPO ADMIN (Avisos, Erros, Confirmações). Se não existir, manda pro VIP por segurança.
+const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId; 
 const bot = new TelegramBot(telegramToken, { polling: false });
 
 // Configurações da Bitget
@@ -184,7 +186,6 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
         } catch (errPosTpsl) {
             console.error('[BOT] Erro ao configurar TP/SL:', errPosTpsl.message);
-            // AGORA ELE GERA UM ERRO REAL SE O TP/SL FALHAR
             throw new Error(`A ordem foi aberta, mas a Bitget recusou o TP/SL. Motivo: ${errPosTpsl.message}`);
         }
 
@@ -209,6 +210,7 @@ const handleSignal = async (body) => {
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
+        // MENSAGEM DE SINAL (VAI PARA O GRUPO VIP)
         const telegramMsg =
             `${emoji} *SINAL DE ${tipo}*\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -227,19 +229,22 @@ const handleSignal = async (body) => {
 
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
-            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            // AVISO DE POSIÇÃO ABERTA (VAI PARA O GRUPO ADMIN)
+            await bot.sendMessage(telegramAdminChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
             return;
         }
 
         await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
 
         if (await getOpenPositions(normalizedSymbol)) { 
-            await bot.sendMessage(telegramChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
+            // CONFIRMAÇÃO DE SUCESSO (VAI PARA O GRUPO ADMIN)
+            await bot.sendMessage(telegramAdminChatId, `✅ Ordem automática de ${tipo} para ${normalizedSymbol} executada com sucesso e protegida com TP/SL!`, { parse_mode: 'Markdown' });
         }
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
 
+        // AVISOS DE ERRO E SALDO (VÃO PARA O GRUPO ADMIN)
         if (error.message.includes('40762') || error.message.includes('exceeds the balance') || error.message.includes('Saldo insuficiente')) {
             const msgSaldo = 
                 `⚠️ *Aviso de Saldo*\n` +
@@ -248,9 +253,9 @@ const handleSignal = async (body) => {
                 `**Motivo:** Saldo insuficiente na corretora.\n` +
                 `_Por favor, adicione fundos à sua conta de futuros da Bitget para continuar operando._\n` +
                 `━━━━━━━━━━━━━━━━━━━━`;
-            await bot.sendMessage(telegramChatId, msgSaldo, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramAdminChatId, msgSaldo, { parse_mode: 'Markdown' });
         } else {
-            await bot.sendMessage(telegramChatId, `❌ *Aviso:* Não foi possível executar a ordem de ${normalizedSymbol || 'ativo'}. Motivo: ${error.message}`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramAdminChatId, `❌ *Aviso:* Não foi possível executar a ordem de ${normalizedSymbol || 'ativo'}. Motivo: ${error.message}`, { parse_mode: 'Markdown' });
         }
     }
 };
@@ -261,6 +266,7 @@ app.post('/webhook-bot', async (req, res) => {
         const body = req.body;
 
         if (body.result_icon && body.placar_str) {
+            // MENSAGEM DE SAÍDA/RESULTADO (VAI PARA O GRUPO VIP)
             const exitMsg = body.result_icon + "\n" +
                             "━━━━━━━━━━━━━━━━━━━━\n" +
                             "📌 *Par:* "        + body.pair_name + "\n" +
