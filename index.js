@@ -58,23 +58,23 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// NOVA FUNÇÃO: Obter saldo disponível na conta de futuros
+// FUNÇÃO ATUALIZADA: Obter saldo disponível na conta de futuros
 const getAvailableBalance = async () => {
     try {
-        // Endpoint para listar todas as contas (spot e futuros)
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account-list'); 
-        if (response && response.data && response.data.length > 0) {
-            // Filtrar para encontrar a conta USDT-FUTURES
-            const usdtFuturesAccount = response.data.find(acc => acc.productType === 'USDT-FUTURES' && acc.marginCoin === 'USDT');
-            if (usdtFuturesAccount) {
-                console.log('[BOT] Detalhes completos da conta USDT-FUTURES encontrados:', JSON.stringify(usdtFuturesAccount, null, 2));
-                return parseFloat(usdtFuturesAccount.available);
+        // Endpoint que comprovadamente funciona para listar todos os saldos de conta
+        const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
+        if (response && response.data && Array.isArray(response.data)) {
+            // Filtrar para encontrar a conta de futuros
+            const futuresAccount = response.data.find(acc => acc.accountType === 'futures');
+            if (futuresAccount && futuresAccount.usdtBalance !== undefined) {
+                console.log('[BOT] Detalhes completos da conta de futuros encontrados:', JSON.stringify(futuresAccount, null, 2));
+                return parseFloat(futuresAccount.usdtBalance);
             }
         }
-        console.log('[BOT] Nenhuma conta USDT-FUTURES encontrada ou saldo zero.');
+        console.log('[BOT] Nenhum saldo USDT encontrado na conta de futuros ou saldo zero.');
         return 0;
     } catch (error) {
-        console.error('[BOT] Erro ao obter saldo disponível:', error.message);
+        console.error('[BOT] Erro ao obter saldo disponível da conta de futuros:', error.message);
         return 0;
     }
 };
@@ -94,7 +94,7 @@ const getOpenPositions = async (symbol) => {
     }
 };
 
-// NOVA FUNÇÃO: Para obter os detalhes de uma posição aberta específica, incluindo o preço de entrada
+// Função para obter os detalhes de uma posição aberta específica, incluindo o preço de entrada
 const getPositionDetails = async (symbol, holdSide) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT`);
@@ -302,7 +302,6 @@ const handleSignal = async (body) => {
             `💰 *Entrada:* \`${price}\`\n` +
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
             `📊 *Placar Geral:* ${wins}W - ${losses}L (${winRate}%)\n` +
             `🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n` +
             `━━━━━━━━━━━━━━━━━━━━\n` +
