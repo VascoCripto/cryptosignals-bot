@@ -131,6 +131,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- 1. FORÇA A ALAVANCAGEM ---
         let alavancagem = 10; 
+
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB') || symbol.includes('ICP')) {
             alavancagem = 5; 
         } else if (symbol.includes('ZEC')) { 
@@ -140,6 +141,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // --- 2. CÁLCULO AUTOMÁTICO DO TAMANHO DA ORDEM ---
         let margemDesejada = 5; 
+
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
             margemDesejada = 5; 
         } else if (symbol.includes('BGB') || symbol.includes('ICP') || symbol.includes('ZEC')) { 
@@ -182,7 +184,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             marginCoin: 'USDT',
             size: size.toString(), 
             side: side, 
-            tradeSide: 'open', // <--- VOLTAMOS PARA O COMANDO DO MODO UNILATERAL
+            tradeSide: 'open', 
             orderType: 'market' 
         };
         console.log('[BOT] Enviando ordem principal a mercado:', orderData);
@@ -214,10 +216,12 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); 
         }
 
+        // --- AJUSTE DE PRECISÃO (ICP CORRIGIDA PARA 3) ---
         let precision = 2; 
         if (symbol.includes('BTC')) precision = 1; 
         else if (symbol.includes('ETH')) precision = 2; 
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) precision = 4; 
+        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) precision = 4; 
+        else if (symbol.includes('ICP')) precision = 3; 
         else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ZEC')) precision = 2; 
         else if (symbol.includes('BGB')) precision = 4; 
 
