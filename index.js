@@ -117,7 +117,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         // Ajusta a alavancagem para moedas de baixo valor
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
-            alavancagem = 5; // <<< Reduz alavancagem para 5x para esses ativos
+            alavancagem = 5; // Reduz alavancagem para 5x para esses ativos
         }
         await setLeverage(symbol, alavancagem, holdSide);
 
@@ -125,8 +125,10 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         let margemDesejada = 5; // Margem padrão de $5 USD
 
         // Ajusta a margem desejada para moedas de baixo/médio valor
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) {
-            margemDesejada = 5; // <<< REDUZIDO PARA $5 USD de margem para moedas muito baratas
+        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
+            margemDesejada = 5; // $5 USD de margem para XRP, ADA, DOGE
+        } else if (symbol.includes('BGB')) { // <<< CONDIÇÃO ESPECÍFICA PARA BGB
+            margemDesejada = 10; // <<< $10 USD de margem para BGB
         } else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ETH') || symbol.includes('ICP') || symbol.includes('ZEC')) {
             margemDesejada = 15; // $15 USD para esses ativos
         }
