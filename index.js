@@ -58,7 +58,7 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// FUNÇÃO ATUALIZADA: Obter saldo disponível na conta de futuros
+// Obter saldo disponível na conta de futuros
 const getAvailableBalance = async () => {
     try {
         const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
@@ -163,14 +163,14 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size = ((tamanhoTotalDaPosicao / price) / 10).toFixed(2); 
         } else if (symbol.includes('ICP') || symbol.includes('AVAX') || symbol.includes('SOL') || symbol.includes('BNB')) { 
             size = (tamanhoTotalDaPosicao / price).toFixed(2); 
-        } else { 
+        } else {
             size = (tamanhoTotalDaPosicao / price).toFixed(2); 
         }
 
         const availableBalance = await getAvailableBalance();
-
-        console.log(`[BOT] Saldo disponível na Bitget (lido pelo bot): ${availableBalance} USDT`);
-        console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x, Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
+        console.log(`[BOT] Saldo disponível na Bitget: ${availableBalance} USDT`);
+        console.log(`[BOT] Margem desejada: ${margemDesejada} USD, Alavancagem: ${alavancagem}x`);
+        console.log(`[BOT] Tamanho total da posição: ${tamanhoTotalDaPosicao} USD, Preço: ${price}, Size calculado: ${size}`);
 
         if (availableBalance < margemDesejada) {
             throw new Error(`Saldo insuficiente na conta de futuros da Bitget. Necessário: ${margemDesejada} USDT, Disponível: ${availableBalance} USDT.`);
@@ -191,11 +191,9 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         console.log('[BOT] Ordem principal executada com sucesso!');
 
-        // --- AGUARDA 5 SEGUNDOS PARA A CORRETORA PROCESSAR A POSIÇÃO ---
         console.log('[BOT] Aguardando 5 segundos para sincronização da posição na Bitget...');
         await sleep(5000); 
 
-        // --- NOVO PASSO: OBTER O PREÇO DE ENTRADA REAL DA POSIÇÃO ---
         const positionDetails = await getPositionDetails(symbol, holdSide);
         if (!positionDetails || !positionDetails.openPriceAvg) { 
             console.error('[BOT] Erro: positionDetails ou openPriceAvg não encontrados. Detalhes da posição:', positionDetails);
@@ -204,7 +202,6 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         const realEntryPrice = parseFloat(positionDetails.openPriceAvg); 
         console.log(`[BOT] Preço de entrada real da posição na Bitget: ${realEntryPrice}`);
 
-        // --- RECALCULAR TP/SL COM BASE NO PREÇO DE ENTRADA REAL ---
         let recalculatedTakeProfit;
         let recalculatedStopLoss;
 
@@ -216,7 +213,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             recalculatedStopLoss = realEntryPrice * (1 + (slPct / 100)); 
         }
 
-        // --- AJUSTE DE PRECISÃO (ICP CORRIGIDA PARA 3) ---
+        // --- AJUSTE DE PRECISÃO (ICP COM 3 CASAS) ---
         let precision = 2; 
         if (symbol.includes('BTC')) precision = 1; 
         else if (symbol.includes('ETH')) precision = 2; 
@@ -260,6 +257,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
 // Função principal para lidar com os sinais do TradingView
 const handleSignal = async (body) => {
+    let normalizedSymbol = '';
     try {
         console.log('[BOT] Sinal de entrada JSON recebido:', JSON.stringify(body));
 
@@ -270,7 +268,7 @@ const handleSignal = async (body) => {
             return;
         }
 
-        const normalizedSymbol = symbol.replace('_', '').toUpperCase();
+        normalizedSymbol = symbol.replace('_', '').toUpperCase();
         const tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
@@ -295,7 +293,7 @@ const handleSignal = async (body) => {
         const hasOpenPosition = await getOpenPositions(normalizedSymbol);
         if (hasOpenPosition) {
             console.log('[BOT] Já existe uma posição aberta. Ordem na Bitget ignorada.');
-            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posiçãão aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
+            await bot.sendMessage(telegramChatId, `⚠️ _Aviso do Bot: O sinal acima não foi executado na conta automática pois já existe uma posição aberta para ${normalizedSymbol}._`, { parse_mode: 'Markdown' });
             return;
         }
 
@@ -308,7 +306,20 @@ const handleSignal = async (body) => {
 
     } catch (error) {
         console.error('[BOT] Erro fatal ao processar sinal:', error.message);
-        await bot.sendMessage(telegramChatId, `❌ *Erro Crítico:* Falha ao processar sinal. Detalhes: ${error.message}`, { parse_mode: 'Markdown' });
+
+        // --- NOVA MENSAGEM AMIGÁVEL DE SALDO INSUFICIENTE ---
+        if (error.message.includes('Saldo insuficiente')) {
+            const msgSaldo = 
+                `⚠️ *Aviso do Robô*\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `A operação para **${normalizedSymbol || 'o ativo'}** não foi executada.\n\n` +
+                `**Motivo:** Saldo insuficiente na corretora.\n` +
+                `_Recarregue sua conta de futuros para que o robô volte a operar._\n` +
+                `━━━━━━━━━━━━━━━━━━━━`;
+            await bot.sendMessage(telegramChatId, msgSaldo, { parse_mode: 'Markdown' });
+        } else {
+            await bot.sendMessage(telegramChatId, `❌ *Aviso:* Não foi possível executar a ordem de ${normalizedSymbol || 'ativo'}. Motivo: ${error.message}`, { parse_mode: 'Markdown' });
+        }
     }
 };
 
