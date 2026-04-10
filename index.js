@@ -197,7 +197,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 // Função principal para lidar com os sinais
 const handleSignal = async (body) => {
     let normalizedSymbol = '';
-    let signalDetails = ''; // Variável para guardar os detalhes e usar no catch
+    let signalDetails = ''; 
     let tipo = '';
 
     try {
@@ -293,7 +293,7 @@ app.post('/webhook-bot', async (req, res) => {
         const body = req.body;
 
         if (body.result_icon && body.placar_str) {
-            // MENSAGEM DE SAÍDA/RESULTADO (VAI PARA O GRUPO VIP)
+            // MENSAGEM DE SAÍDA/RESULTADO
             const exitMsg = body.result_icon + "\n" +
                             "━━━━━━━━━━━━━━━━━━━━\n" +
                             "📌 *Par:* "        + body.pair_name + "\n" +
@@ -304,13 +304,19 @@ app.post('/webhook-bot', async (req, res) => {
                             "💵 *Resultado:* "  + body.result_text + "\n" +
                             "━━━━━━━━━━━━━━━━━━━━" + body.placar_str;
 
+            // 1. Envia para o grupo VIP
             await bot.sendMessage(telegramChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+
+            // 2. Envia também para o grupo ADMIN
+            await bot.sendMessage(telegramAdminChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+
         } else {
             await handleSignal(body);
         }
 
         res.status(200).send('OK');
     } catch (error) {
+        console.error('[BOT] Erro no webhook:', error);
         res.status(500).send('Erro interno do servidor');
     }
 });
