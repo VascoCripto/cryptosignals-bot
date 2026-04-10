@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 
 // Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramChatId = process.env.TELEGRAM_CHAT_ID; // GRUPO VIP (Apenas Sinais)
+const telegramChatId = process.env.TELEGRAM_CHAT_ID; // GRUPO VIP
 const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId; // GRUPO ADMIN
 const bot = new TelegramBot(telegramToken, { polling: false });
 
@@ -212,11 +212,17 @@ const handleSignal = async (body) => {
         const emoji = action === 'buy' ? '🟢' : '🔴';
         const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
 
+        // --- CORREÇÃO VISUAL DA ALAVANCAGEM ---
+        let alavancagemTexto = '10x';
+        if (normalizedSymbol.includes('XRP') || normalizedSymbol.includes('ADA') || normalizedSymbol.includes('DOGE') || normalizedSymbol.includes('ICP')) {
+            alavancagemTexto = '5x';
+        }
+
         // BLOCO DE DETALHES (Usado tanto no VIP quanto no Admin)
         signalDetails =
             `📌 *Par:* ${normalizedSymbol}\n` +
             `⏱ *Timeframe:* ${timeframe}\n` +
-            `⚙️ *Alavancagem:* 10x\n\n` + 
+            `⚙️ *Alavancagem:* ${alavancagemTexto}\n\n` + 
             `💰 *Entrada:* \`${price}\`\n` +
             `🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n` +
             `🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n` +
