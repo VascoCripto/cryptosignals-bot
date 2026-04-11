@@ -54,20 +54,16 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-const getAvailableBalance = async () => {
+const getOpenPositionData = async (symbol) => {
     try {
-        const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
+        const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
         if (response && response.data && Array.isArray(response.data)) {
-            const futuresAccount = response.data.find(acc => acc.accountType === 'futures');
-            // Lendo apenas o saldo livre (available) para evitar o erro de saldo insuficiente
-            if (futuresAccount && futuresAccount.available !== undefined) {
-                return parseFloat(futuresAccount.available);
-            }
+            const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
+            if (positions.length > 0) return positions[0]; 
         }
-        return 0;
+        return null;
     } catch (error) {
-        console.error('[BOT] Erro ao buscar saldo:', error.message);
-        return 0;
+        return null;
     }
 };
 
