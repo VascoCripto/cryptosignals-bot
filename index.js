@@ -10,8 +10,8 @@ app.use(bodyParser.json());
 
 // Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramChatId = process.env.TELEGRAM_CHAT_ID; // GRUPO VIP
-const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId; // GRUPO ADMIN
+const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId;
 const bot = new TelegramBot(telegramToken, { polling: false });
 
 // Configurações da Bitget
@@ -54,6 +54,21 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
+// 1. CORREÇÃO: Lendo o saldo livre (available)
+const getAvailableBalance = async () => {
+    try {
+        const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
+        if (response && response.data && Array.isArray(response.data)) {
+            const futuresAccount = response.data.find(acc => acc.accountType === 'futures');
+            if (futuresAccount && futuresAccount.available !== undefined) return parseFloat(futuresAccount.available);
+        }
+        return 0;
+    } catch (error) {
+        return 0;
+    }
+};
+
+// 2. FUNÇÃO RESTAURADA: Buscar posições abertas
 const getOpenPositionData = async (symbol) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
@@ -67,9 +82,24 @@ const getOpenPositionData = async (symbol) => {
     }
 };
 
+// 3. FUNÇÃO ADICIONADA: Ajustar Alavancagem
+const setLeverage = async (symbol, leverage, holdSide) => {
+    try {
+        await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            leverage: leverage.toString(),
+            holdSide: holdSide
+        });
+    } catch (error) {
+        console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
+    }
+};
+
+// 4. CORREÇÃO: Fechamento forçado de posição
 const closePosition = async (symbol, holdSide) => {
     try {
-        // Usando o endpoint oficial de fechamento forçado (ignora TP/SL pendentes)
         const orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -101,39 +131,37 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         if (symbol.includes('BTC')) size = size.toFixed(3);
         else if (symbol.includes('ETH')) size = size.toFixed(2);
         else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
-        else if (symbol.includes('ICP')) size = size.toFixed(2);
-        else if (symbol.includes('AVAX') || symbol.includes('DOT') || symbol.includes('SOL') || symbol.includes('BNB') || symbol.includes('ZEC')) size = size.toFixed(1);
-        else if (symbol.includes('BGB')) size = Math.floor(size).toString();
-        else size = size.toFixed(2);
+        else size = size.toFixed(1);
 
         const orderData = {
-            symbol: symbol, productType: 'USDT-FUTURES', marginMode: 'isolated', marginCoin: 'USDT',
-            size: size.toString(), side: side, tradeSide: 'open', orderType: 'market' 
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginMode: 'isolated',
+            marginCoin: 'USDT',
+            size: size.toString(),
+            price: price.toString(),
+            side: side,
+            orderType: 'market',
+            holdSide: holdSide
         };
-
-        const response = await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         await sleep(2000);
 
-        let recalculatedTakeProfit = action === 'buy' ? price * (1 + (tpPct / 100)) : price * (1 - (tpPct / 100));
-        let recalculatedStopLoss = action === 'buy' ? price * (1 - (slPct / 100)) : price * (1 + (slPct / 100));
+        const posTpslData = {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            holdSide: holdSide,
+            stopSurplusTriggerPrice: takeProfit.toString(),
+            stopSurplusTriggerType: 'mark_price',
+            stopLossTriggerPrice: stopLoss.toString(),
+            stopLossTriggerType: 'mark_price'
+        };
+        await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
 
-        let precision = 2; 
-        if (symbol.includes('BTC')) precision = 1; 
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('BGB')) precision = 4; 
-        else if (symbol.includes('ICP')) precision = 3; 
-
-        try {
-            const posTpslData = {
-                symbol: symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', holdSide: holdSide,
-                stopSurplusTriggerPrice: parseFloat(recalculatedTakeProfit).toFixed(precision), stopSurplusTriggerType: 'mark_price',
-                stopLossTriggerPrice: parseFloat(recalculatedStopLoss).toFixed(precision), stopLossTriggerType: 'mark_price',
-            };
-            await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
-        } catch (errPosTpsl) {
-            console.error('[BOT] Erro ao configurar TP/SL:', errPosTpsl.message);
-        }
-        return response;
-    } catch (error) { throw error; }
+    } catch (error) {
+        throw error;
+    }
 };
 
 const handleSignal = async (body) => {
@@ -169,7 +197,6 @@ const handleSignal = async (body) => {
                 const adminMsgReversao = `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${normalizedSymbol}\n_Fechando posição anterior para abrir a nova..._`;
                 await bot.sendMessage(telegramAdminChatId, adminMsgReversao, { parse_mode: 'Markdown', disable_web_page_preview: true });
 
-                // Chamada corrigida (sem o tamanho da posição)
                 await closePosition(normalizedSymbol, currentHoldSide);
                 await sleep(2000); 
             }
@@ -188,19 +215,16 @@ const handleSignal = async (body) => {
     }
 };
 
-// Rota para o webhook
 app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
 
         if (body.action === 'close' || (body.result_icon && body.placar_str)) {
-
             if (body.symbol) {
                 const normalizedSymbol = body.symbol.replace('_', '').toUpperCase();
                 const openPosition = await getOpenPositionData(normalizedSymbol);
                 if (openPosition) {
                     try {
-                        // Chamada corrigida (sem o tamanho da posição)
                         await closePosition(normalizedSymbol, openPosition.holdSide);
                         console.log(`[BOT] Posição fechada via Webhook (Trailing Stop).`);
                     } catch (e) {
