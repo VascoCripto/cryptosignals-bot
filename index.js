@@ -8,13 +8,11 @@ require('dotenv').config();
 const app = express();
 app.use(bodyParser.json());
 
-// Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId;
 const bot = new TelegramBot(telegramToken, { polling: false });
 
-// Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
@@ -49,21 +47,20 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         return response.data;
     } catch (error) {
         const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
-        console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
+        console.error(`[BOT] Erro na requisição Bitget API (${requestPath}):`, errorDetails);
         throw new Error(errorDetails);
     }
 };
 
-// 1. URL REVERTIDA PARA A ORIGINAL (Fim do erro 400172)
+// Leitora de saldo atualizada (Evita o erro 400172)
 const getAvailableBalance = async () => {
     try {
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
-        if (response && response.data) {
-            const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
-            if (accountData && accountData.available !== undefined) {
-                const saldo = parseFloat(accountData.available);
-                console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
-                return saldo;
+        const resAll = await bitgetRequest('GET', '/api/v2/account/all-account-balance');
+        if (resAll && resAll.data && Array.isArray(resAll.data)) {
+            const futuresAcc = resAll.data.find(acc => acc.coin === 'USDT' && (acc.accountType === 'USDT-FUTURES' || acc.accountType === 'futures'));
+            if (futuresAcc && futuresAcc.available !== undefined) {
+                console.log(`[BOT] Saldo encontrado: ${futuresAcc.available} USDT`);
+                return parseFloat(futuresAcc.available);
             }
         }
         return 0;
@@ -73,13 +70,12 @@ const getAvailableBalance = async () => {
     }
 };
 
-// 2. URL REVERTIDA PARA A ORIGINAL
 const getOpenPositionData = async (symbol) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
-        if (response && response.data && Array.isArray(response.data)) {
-            const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
-            if (positions.length > 0) return positions[0]; 
+        if (response && response.data && response.data.length > 0) {
+            const pos = response.data[0];
+            if (parseFloat(pos.total) > 0) return pos;
         }
         return null;
     } catch (error) {
@@ -87,28 +83,6 @@ const getOpenPositionData = async (symbol) => {
     }
 };
 
-// 3. Ajustar Alavancagem (Enviando a palavra 'unilateral')
-const setLeverage = async (symbol, leverage, holdSide) => {
-    try {
-        let levData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            leverage: leverage.toString(),
-            holdSide: holdSide
-        };
-        try {
-            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
-        } catch (e) {
-            levData.holdSide = 'unilateral';
-            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
-        }
-    } catch (error) {
-        console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
-    }
-};
-
-// 4. Fechamento forçado de posição (Enviando a palavra 'unilateral')
 const closePosition = async (symbol, holdSide) => {
     try {
         let orderData = {
@@ -117,12 +91,7 @@ const closePosition = async (symbol, holdSide) => {
             marginCoin: 'USDT',
             holdSide: holdSide
         };
-        try {
-            await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
-        } catch (e) {
-            orderData.holdSide = 'unilateral';
-            await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
-        }
+        await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
         console.log(`[BOT] Posição de ${symbol} fechada com sucesso.`);
     } catch (error) {
         throw new Error(`Falha ao fechar posição: ${error.message}`);
@@ -136,17 +105,21 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         let alavancagem = 10;
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
-        await setLeverage(symbol, alavancagem, holdSide);
 
-        await getAvailableBalance(); 
+        try {
+            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
+                symbol: symbol,
+                productType: 'USDT-FUTURES',
+                marginCoin: 'USDT',
+                leverage: alavancagem.toString(),
+                holdSide: holdSide
+            });
+        } catch (e) { console.log(`[BOT] Aviso alavancagem: ${e.message}`); }
 
         const marginToUse = 10; 
         let size = (marginToUse * alavancagem) / price;
-        if (symbol.includes('BTC')) size = size.toFixed(3);
-        else if (symbol.includes('ETH')) size = size.toFixed(2);
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
-        else size = size.toFixed(1);
 
+        // A CHARADA RESOLVIDA: Adicionado tradeSide: 'open' exigido pela Bitget no Hedge Mode
         let orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -155,19 +128,12 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size: size.toString(),
             price: price.toString(),
             side: side,
+            tradeSide: 'open', 
             orderType: 'market',
             holdSide: holdSide
         };
 
-        // Tenta abrir a ordem. Se der erro, força a palavra 'unilateral'
-        try {
-            await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        } catch (e) {
-            console.log(`[BOT] Adaptando modo de posição para UNILATERAL em ${symbol}...`);
-            orderData.holdSide = 'unilateral';
-            await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        }
-
+        await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         await sleep(2000);
 
         let posTpslData = {
@@ -181,12 +147,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             stopLossTriggerType: 'mark_price'
         };
 
-        try {
-            await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
-        } catch (e) {
-            posTpslData.holdSide = 'unilateral';
-            await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
-        }
+        await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
 
     } catch (error) {
         throw error;
