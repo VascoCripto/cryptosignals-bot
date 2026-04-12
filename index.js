@@ -54,32 +54,38 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// 1. CORREÇÃO DEFINITIVA: Lendo o saldo livre (available) da conta de Futuros
+// 1. SUPER LEITOR DE SALDO (Busca em múltiplas rotas da Bitget)
 const getAvailableBalance = async () => {
     try {
-        // Busca o saldo especificamente na carteira de Futuros USDT-M
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
-
-        if (response && response.data) {
-            // A API v2 pode retornar os dados diretamente no objeto ou dentro de um array
-            const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
-
-            if (accountData && accountData.available !== undefined) {
-                const saldo = parseFloat(accountData.available);
-                console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
-                return saldo;
+        // Tentativa 1: Rota específica de Futuros USDT-M (Mais precisa)
+        const resMix = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+        if (resMix && resMix.data) {
+            const data = Array.isArray(resMix.data) ? resMix.data[0] : resMix.data;
+            if (data && data.available !== undefined) {
+                console.log(`[BOT] Saldo encontrado na rota Mix: ${data.available} USDT`);
+                return parseFloat(data.available);
             }
         }
 
-        console.log('[BOT] Aviso: Estrutura de saldo não encontrada. Resposta:', JSON.stringify(response));
+        // Tentativa 2: Rota geral de todas as contas (Caso a primeira falhe)
+        const resAll = await bitgetRequest('GET', '/api/v2/account/all-account-balance');
+        if (resAll && resAll.data && Array.isArray(resAll.data)) {
+            const futuresAcc = resAll.data.find(acc => acc.coin === 'USDT' && (acc.accountType === 'USDT-FUTURES' || acc.accountType === 'futures'));
+            if (futuresAcc && futuresAcc.available !== undefined) {
+                console.log(`[BOT] Saldo encontrado na rota Geral: ${futuresAcc.available} USDT`);
+                return parseFloat(futuresAcc.available);
+            }
+        }
+
+        console.log('[BOT] Aviso: Saldo não encontrado nas rotas. Verifique as permissões da API Key.');
         return 0;
     } catch (error) {
-        console.error('[BOT] Erro ao buscar saldo:', error.message);
+        console.error('[BOT] Erro ao tentar ler o saldo:', error.message);
         return 0;
     }
 };
 
-// 2. FUNÇÃO RESTAURADA: Buscar posições abertas
+// 2. Buscar posições abertas
 const getOpenPositionData = async (symbol) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
@@ -93,7 +99,7 @@ const getOpenPositionData = async (symbol) => {
     }
 };
 
-// 3. FUNÇÃO ADICIONADA: Ajustar Alavancagem
+// 3. Ajustar Alavancagem
 const setLeverage = async (symbol, leverage, holdSide) => {
     try {
         await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
@@ -108,7 +114,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
     }
 };
 
-// 4. CORREÇÃO: Fechamento forçado de posição
+// 4. Fechamento forçado de posição
 const closePosition = async (symbol, holdSide) => {
     try {
         const orderData = {
@@ -133,10 +139,11 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
         await setLeverage(symbol, alavancagem, holdSide);
 
-        const availableBalance = await getAvailableBalance();
-        const marginToUse = 10; 
+        // Chama a função para ler e imprimir o saldo no terminal do servidor
+        await getAvailableBalance();
 
-        if (availableBalance < marginToUse) throw new Error(`Saldo insuficiente. Saldo livre atual: ${availableBalance}`);
+        // TRAVA DE SALDO REMOVIDA DAQUI. A BITGET FARÁ A VALIDAÇÃO.
+        const marginToUse = 10; 
 
         let size = (marginToUse * alavancagem) / price;
         if (symbol.includes('BTC')) size = size.toFixed(3);
