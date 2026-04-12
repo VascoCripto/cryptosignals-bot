@@ -49,38 +49,24 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         return response.data;
     } catch (error) {
         const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
-        console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
         throw new Error(errorDetails);
     }
 };
 
-// 1. SUPER LEITOR DE SALDO (Busca em múltiplas rotas da Bitget)
+// 1. LEITOR DE SALDO SIMPLIFICADO (Evita erro de assinatura da Bitget)
 const getAvailableBalance = async () => {
     try {
-        // Tentativa 1: Rota específica de Futuros USDT-M (Mais precisa)
-        const resMix = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
-        if (resMix && resMix.data) {
-            const data = Array.isArray(resMix.data) ? resMix.data[0] : resMix.data;
-            if (data && data.available !== undefined) {
-                console.log(`[BOT] Saldo encontrado na rota Mix: ${data.available} USDT`);
-                return parseFloat(data.available);
-            }
-        }
-
-        // Tentativa 2: Rota geral de todas as contas (Caso a primeira falhe)
         const resAll = await bitgetRequest('GET', '/api/v2/account/all-account-balance');
         if (resAll && resAll.data && Array.isArray(resAll.data)) {
             const futuresAcc = resAll.data.find(acc => acc.coin === 'USDT' && (acc.accountType === 'USDT-FUTURES' || acc.accountType === 'futures'));
             if (futuresAcc && futuresAcc.available !== undefined) {
-                console.log(`[BOT] Saldo encontrado na rota Geral: ${futuresAcc.available} USDT`);
+                console.log(`[BOT] Saldo livre encontrado: ${futuresAcc.available} USDT`);
                 return parseFloat(futuresAcc.available);
             }
         }
-
-        console.log('[BOT] Aviso: Saldo não encontrado nas rotas. Verifique as permissões da API Key.');
         return 0;
     } catch (error) {
-        console.error('[BOT] Erro ao tentar ler o saldo:', error.message);
+        console.error('[BOT] Erro ao ler saldo:', error.message);
         return 0;
     }
 };
@@ -102,29 +88,29 @@ const getOpenPositionData = async (symbol) => {
 // 3. Ajustar Alavancagem
 const setLeverage = async (symbol, leverage, holdSide) => {
     try {
-        await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            leverage: leverage.toString(),
-            holdSide: holdSide
-        });
+        let levData = { symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', leverage: leverage.toString(), holdSide };
+        try {
+            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
+        } catch (e) {
+            delete levData.holdSide; // Adaptação automática
+            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
+        }
     } catch (error) {
         console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
     }
 };
 
-// 4. Fechamento forçado de posição
+// 4. Fechamento forçado de posição com Adaptação
 const closePosition = async (symbol, holdSide) => {
     try {
-        const orderData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            holdSide: holdSide
-        };
-        await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
-        console.log(`[BOT] Posição ${holdSide} de ${symbol} fechada com sucesso.`);
+        let orderData = { symbol, productType: 'USDT-FUTURES', marginCoin: 'USDT', holdSide };
+        try {
+            await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
+        } catch (e) {
+            delete orderData.holdSide; // Adaptação automática
+            await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
+        }
+        console.log(`[BOT] Posição de ${symbol} fechada com sucesso.`);
     } catch (error) {
         throw new Error(`Falha ao fechar posição: ${error.message}`);
     }
@@ -139,19 +125,16 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
         await setLeverage(symbol, alavancagem, holdSide);
 
-        // Chama a função para ler e imprimir o saldo no terminal do servidor
-        await getAvailableBalance();
+        await getAvailableBalance(); // Apenas imprime o saldo no terminal
 
-        // TRAVA DE SALDO REMOVIDA DAQUI. A BITGET FARÁ A VALIDAÇÃO.
         const marginToUse = 10; 
-
         let size = (marginToUse * alavancagem) / price;
         if (symbol.includes('BTC')) size = size.toFixed(3);
         else if (symbol.includes('ETH')) size = size.toFixed(2);
         else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
         else size = size.toFixed(1);
 
-        const orderData = {
+        let orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
             marginMode: 'isolated',
@@ -162,10 +145,19 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             orderType: 'market',
             holdSide: holdSide
         };
-        await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+
+        // Tenta abrir a ordem. Se a Bitget reclamar do modo de posição, adapta e tenta de novo.
+        try {
+            await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        } catch (e) {
+            console.log(`[BOT] Adaptando modo de posição para ${symbol}...`);
+            delete orderData.holdSide;
+            await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+        }
+
         await sleep(2000);
 
-        const posTpslData = {
+        let posTpslData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
             marginCoin: 'USDT',
@@ -175,7 +167,13 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             stopLossTriggerPrice: stopLoss.toString(),
             stopLossTriggerType: 'mark_price'
         };
-        await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
+
+        try {
+            await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
+        } catch (e) {
+            delete posTpslData.holdSide;
+            await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
+        }
 
     } catch (error) {
         throw error;
