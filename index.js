@@ -8,11 +8,13 @@ require('dotenv').config();
 const app = express();
 app.use(bodyParser.json());
 
+// Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId;
 const bot = new TelegramBot(telegramToken, { polling: false });
 
+// Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
@@ -47,20 +49,21 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
         return response.data;
     } catch (error) {
         const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
-        console.error(`[BOT] Erro na requisição Bitget API (${requestPath}):`, errorDetails);
+        console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
         throw new Error(errorDetails);
     }
 };
 
-// Leitora de saldo atualizada (Evita o erro 400172)
+// 1. Leitura de Saldo
 const getAvailableBalance = async () => {
     try {
-        const resAll = await bitgetRequest('GET', '/api/v2/account/all-account-balance');
-        if (resAll && resAll.data && Array.isArray(resAll.data)) {
-            const futuresAcc = resAll.data.find(acc => acc.coin === 'USDT' && (acc.accountType === 'USDT-FUTURES' || acc.accountType === 'futures'));
-            if (futuresAcc && futuresAcc.available !== undefined) {
-                console.log(`[BOT] Saldo encontrado: ${futuresAcc.available} USDT`);
-                return parseFloat(futuresAcc.available);
+        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+        if (response && response.data) {
+            const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
+            if (accountData && accountData.available !== undefined) {
+                const saldo = parseFloat(accountData.available);
+                console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
+                return saldo;
             }
         }
         return 0;
@@ -70,12 +73,13 @@ const getAvailableBalance = async () => {
     }
 };
 
+// 2. Leitura de Posições Abertas
 const getOpenPositionData = async (symbol) => {
     try {
         const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
-        if (response && response.data && response.data.length > 0) {
-            const pos = response.data[0];
-            if (parseFloat(pos.total) > 0) return pos;
+        if (response && response.data && Array.isArray(response.data)) {
+            const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
+            if (positions.length > 0) return positions[0]; 
         }
         return null;
     } catch (error) {
@@ -83,6 +87,23 @@ const getOpenPositionData = async (symbol) => {
     }
 };
 
+// 3. Ajustar Alavancagem (Hedge Mode)
+const setLeverage = async (symbol, leverage, holdSide) => {
+    try {
+        let levData = {
+            symbol: symbol,
+            productType: 'USDT-FUTURES',
+            marginCoin: 'USDT',
+            leverage: leverage.toString(),
+            holdSide: holdSide
+        };
+        await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
+    } catch (error) {
+        console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
+    }
+};
+
+// 4. Fechamento de posição (Hedge Mode)
 const closePosition = async (symbol, holdSide) => {
     try {
         let orderData = {
@@ -98,6 +119,7 @@ const closePosition = async (symbol, holdSide) => {
     }
 };
 
+// 5. Abertura de Ordem
 const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tpPct) => {
     try {
         const side = action === 'buy' ? 'buy' : 'sell';
@@ -105,21 +127,17 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
 
         let alavancagem = 10;
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
+        await setLeverage(symbol, alavancagem, holdSide);
 
-        try {
-            await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
-                symbol: symbol,
-                productType: 'USDT-FUTURES',
-                marginCoin: 'USDT',
-                leverage: alavancagem.toString(),
-                holdSide: holdSide
-            });
-        } catch (e) { console.log(`[BOT] Aviso alavancagem: ${e.message}`); }
+        await getAvailableBalance(); 
 
         const marginToUse = 10; 
         let size = (marginToUse * alavancagem) / price;
+        if (symbol.includes('BTC')) size = size.toFixed(3);
+        else if (symbol.includes('ETH')) size = size.toFixed(2);
+        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
+        else size = size.toFixed(1);
 
-        // A CHARADA RESOLVIDA: Adicionado tradeSide: 'open' exigido pela Bitget no Hedge Mode
         let orderData = {
             symbol: symbol,
             productType: 'USDT-FUTURES',
@@ -128,9 +146,9 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             size: size.toString(),
             price: price.toString(),
             side: side,
-            tradeSide: 'open', 
             orderType: 'market',
-            holdSide: holdSide
+            holdSide: holdSide,
+            tradeSide: 'open' // Parâmetro obrigatório adicionado para Hedge Mode
         };
 
         await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
@@ -154,6 +172,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
     }
 };
 
+// 6. Processamento do Sinal
 const handleSignal = async (body) => {
     let normalizedSymbol = '';
     let signalDetails = ''; 
@@ -199,12 +218,23 @@ const handleSignal = async (body) => {
             await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
         }
     } catch (error) {
+        let motivoErro = error.message;
+
+        // Traduzindo os erros da Bitget para Português
+        if (motivoErro.includes('insufficient balance') || motivoErro.includes('balance')) {
+            motivoErro = "Saldo insuficiente para abrir esta operação.";
+        } else if (motivoErro.includes('size')) {
+            motivoErro = "O valor da entrada é menor que o mínimo permitido pela corretora.";
+        }
+
         const fallbackDetails = signalDetails || `📌 *Par:* ${normalizedSymbol || 'Desconhecido'}\n`;
-        const adminMsg = `❌ *ERRO AO EXECUTAR ORDEM*\n━━━━━━━━━━━━━━━━━━━━\n${fallbackDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: ${error.message}_`;
+        const adminMsg = `❌ *ERRO AO EXECUTAR ORDEM*\n━━━━━━━━━━━━━━━━━━━━\n${fallbackDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: ${motivoErro}_`;
+
         await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
     }
 };
 
+// 7. Webhook
 app.post('/webhook-bot', async (req, res) => {
     try {
         const body = req.body;
