@@ -54,10 +54,10 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// 1. Lendo o saldo livre (Versão que funcionava no seu código antigo)
+// 1. CORREÇÃO DE ASSINATURA: Parâmetros em ordem alfabética (M antes de P)
 const getAvailableBalance = async () => {
     try {
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?marginCoin=USDT&productType=USDT-FUTURES');
         if (response && response.data) {
             const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
             if (accountData && accountData.available !== undefined) {
@@ -73,10 +73,10 @@ const getAvailableBalance = async () => {
     }
 };
 
-// 2. Buscar posições abertas
+// 2. CORREÇÃO DE ASSINATURA: Parâmetros em ordem alfabética (M, P, S)
 const getOpenPositionData = async (symbol) => {
     try {
-        const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
+        const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?marginCoin=USDT&productType=USDT-FUTURES&symbol=${symbol}`);
         if (response && response.data && Array.isArray(response.data)) {
             const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
             if (positions.length > 0) return positions[0]; 
@@ -87,7 +87,7 @@ const getOpenPositionData = async (symbol) => {
     }
 };
 
-// 3. Ajustar Alavancagem (Com adaptação Unilateral)
+// 3. Ajustar Alavancagem (Com adaptação One-Way)
 const setLeverage = async (symbol, leverage, holdSide) => {
     try {
         let levData = {
@@ -100,7 +100,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
         try {
             await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
         } catch (e) {
-            levData.holdSide = 'unilateral';
+            delete levData.holdSide;
             await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
         }
     } catch (error) {
@@ -108,7 +108,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
     }
 };
 
-// 4. Fechamento forçado de posição (Com adaptação Unilateral)
+// 4. Fechamento forçado de posição (Com adaptação One-Way)
 const closePosition = async (symbol, holdSide) => {
     try {
         let orderData = {
@@ -120,7 +120,7 @@ const closePosition = async (symbol, holdSide) => {
         try {
             await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
         } catch (e) {
-            orderData.holdSide = 'unilateral';
+            delete orderData.holdSide;
             await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
         }
         console.log(`[BOT] Posição de ${symbol} fechada com sucesso.`);
@@ -138,7 +138,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
         await setLeverage(symbol, alavancagem, holdSide);
 
-        await getAvailableBalance(); // Apenas lê o saldo para log, sem travar a ordem
+        await getAvailableBalance(); // Apenas lê o saldo para log
 
         const marginToUse = 10; 
         let size = (marginToUse * alavancagem) / price;
@@ -159,12 +159,12 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
             holdSide: holdSide
         };
 
-        // Tenta abrir a ordem. Se der erro de Hedge, força o modo Unilateral
+        // Tenta abrir a ordem. Se der erro de Hedge, remove o holdSide (One-Way)
         try {
             await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         } catch (e) {
-            console.log(`[BOT] Adaptando modo de posição para UNILATERAL em ${symbol}...`);
-            orderData.holdSide = 'unilateral';
+            console.log(`[BOT] Adaptando modo de posição para ONE-WAY em ${symbol}...`);
+            delete orderData.holdSide;
             await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
         }
 
@@ -184,7 +184,7 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tp
         try {
             await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
         } catch (e) {
-            posTpslData.holdSide = 'unilateral';
+            delete posTpslData.holdSide;
             await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
         }
 
