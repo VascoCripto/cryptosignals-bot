@@ -54,16 +54,27 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     }
 };
 
-// 1. CORREÇÃO: Lendo o saldo livre (available)
+// 1. CORREÇÃO DEFINITIVA: Lendo o saldo livre (available) da conta de Futuros
 const getAvailableBalance = async () => {
     try {
-        const response = await bitgetRequest('GET', '/api/v2/account/all-account-balance'); 
-        if (response && response.data && Array.isArray(response.data)) {
-            const futuresAccount = response.data.find(acc => acc.accountType === 'futures');
-            if (futuresAccount && futuresAccount.available !== undefined) return parseFloat(futuresAccount.available);
+        // Busca o saldo especificamente na carteira de Futuros USDT-M
+        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+
+        if (response && response.data) {
+            // A API v2 pode retornar os dados diretamente no objeto ou dentro de um array
+            const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
+
+            if (accountData && accountData.available !== undefined) {
+                const saldo = parseFloat(accountData.available);
+                console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
+                return saldo;
+            }
         }
+
+        console.log('[BOT] Aviso: Estrutura de saldo não encontrada. Resposta:', JSON.stringify(response));
         return 0;
     } catch (error) {
+        console.error('[BOT] Erro ao buscar saldo:', error.message);
         return 0;
     }
 };
