@@ -8,13 +8,11 @@ require('dotenv').config();
 const app = express();
 app.use(bodyParser.json());
 
-// Configurações do Telegram
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || telegramChatId;
 const bot = new TelegramBot(telegramToken, { polling: false });
 
-// Configurações da Bitget
 const bitgetApiKey = process.env.BITGET_API_KEY;
 const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
@@ -22,261 +20,375 @@ const bitgetApiUrl = 'https://api.bitget.com';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const escapeMarkdown = (text = '') => String(text)
+  .replace(/_/g, '\\_')
+  .replace(/\*/g, '\\*')
+  .replace(/\[/g, '\\[')
+  .replace(/\]/g, '\\]')
+  .replace(/\(/g, '\\(')
+  .replace(/\)/g, '\\)')
+  .replace(/~/g, '\\~')
+  .replace(/`/g, '\\`')
+  .replace(/>/g, '\\>')
+  .replace(/#/g, '\\#')
+  .replace(/\+/g, '\\+')
+  .replace(/-/g, '\\-')
+  .replace(/=/g, '\\=')
+  .replace(/\|/g, '\\|')
+  .replace(/\{/g, '\\{')
+  .replace(/\}/g, '\\}')
+  .replace(/\./g, '\\.')
+  .replace(/!/g, '\\!');
+
+const sendTelegram = async (chatId, text) => {
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'MarkdownV2',
+    disable_web_page_preview: true
+  });
+};
+
+const formatNumber = (value, decimals = 4) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value ?? '-');
+  return num.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+};
+
+const normalizeSymbol = (raw) => String(raw || '').replace('_', '').toUpperCase();
+const getPayloadSymbol = (body) => normalizeSymbol(body.symbol || body.pair_name);
+const getTradeDir = (body) => body.tradeDir || body.trade_dir || (body.action === 'buy' ? 'LONG' : body.action === 'sell' ? 'SHORT' : 'N/D');
+const getEntryTime = (body) => body.entryTime || body.entry_time || '-';
+const getExitTime = (body) => body.exitTime || body.exit_time || '-';
+
+const getLeverageForSymbol = (symbol) => {
+  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) return 5;
+  return 10;
+};
+
 const generateSignature = (timestamp, method, requestPath, body = '') => {
-    const message = timestamp + method + requestPath + body;
-    return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
+  const message = timestamp + method + requestPath + body;
+  return crypto.createHmac('sha256', bitgetApiSecret).update(message).digest('base64');
 };
 
 const bitgetRequest = async (method, requestPath, data = {}) => {
-    const timestamp = Date.now().toString();
-    const body = method === 'GET' ? '' : JSON.stringify(data);
-    const signature = generateSignature(timestamp, method, requestPath, body);
+  const timestamp = Date.now().toString();
+  const body = method === 'GET' ? '' : JSON.stringify(data);
+  const signature = generateSignature(timestamp, method, requestPath, body);
 
-    try {
-        const headers = {
-            'Content-Type': 'application/json',
-            'ACCESS-KEY': bitgetApiKey,
-            'ACCESS-TIMESTAMP': timestamp,
-            'ACCESS-SIGN': signature,
-            'ACCESS-PASSPHRASE': bitgetApiPassphrase,
-            'locale': 'en-US'
-        };
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      'ACCESS-KEY': bitgetApiKey,
+      'ACCESS-TIMESTAMP': timestamp,
+      'ACCESS-SIGN': signature,
+      'ACCESS-PASSPHRASE': bitgetApiPassphrase,
+      'locale': 'en-US'
+    };
 
-        const config = { method, url: `${bitgetApiUrl}${requestPath}`, headers };
-        if (method !== 'GET') config.data = body;
+    const config = { method, url: `${bitgetApiUrl}${requestPath}`, headers };
+    if (method !== 'GET') config.data = body;
 
-        const response = await axios(config);
-        return response.data;
-    } catch (error) {
-        const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
-        console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
-        throw new Error(errorDetails);
-    }
+    const response = await axios(config);
+    return response.data;
+  } catch (error) {
+    const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
+    console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
+    throw new Error(errorDetails);
+  }
 };
 
-// 1. Leitura de Saldo
 const getAvailableBalance = async () => {
-    try {
-        const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
-        if (response && response.data) {
-            const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
-            if (accountData && accountData.available !== undefined) {
-                const saldo = parseFloat(accountData.available);
-                console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
-                return saldo;
-            }
-        }
-        return 0;
-    } catch (error) {
-        console.error('[BOT] Erro ao buscar saldo:', error.message);
-        return 0;
+  try {
+    const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+    if (response && response.data) {
+      const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
+      if (accountData && accountData.available !== undefined) {
+        const saldo = parseFloat(accountData.available);
+        console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
+        return saldo;
+      }
     }
+    return 0;
+  } catch (error) {
+    console.error('[BOT] Erro ao buscar saldo:', error.message);
+    return 0;
+  }
 };
 
-// 2. Leitura de Posições Abertas
 const getOpenPositionData = async (symbol) => {
-    try {
-        const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
-        if (response && response.data && Array.isArray(response.data)) {
-            const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
-            if (positions.length > 0) return positions[0]; 
-        }
-        return null;
-    } catch (error) {
-        return null;
+  try {
+    const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
+    if (response && response.data && Array.isArray(response.data)) {
+      const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
+      if (positions.length > 0) return positions[0];
     }
+    return null;
+  } catch (error) {
+    return null;
+  }
 };
 
-// 3. Ajustar Alavancagem (Hedge Mode)
 const setLeverage = async (symbol, leverage, holdSide) => {
-    try {
-        let levData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            leverage: leverage.toString(),
-            holdSide: holdSide
-        };
-        await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
-    } catch (error) {
-        console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
-    }
+  try {
+    const levData = {
+      symbol,
+      productType: 'USDT-FUTURES',
+      marginCoin: 'USDT',
+      leverage: leverage.toString(),
+      holdSide
+    };
+    await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
+  } catch (error) {
+    console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
+  }
 };
 
-// 4. Fechamento de posição (Hedge Mode)
 const closePosition = async (symbol, holdSide) => {
-    try {
-        let orderData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            holdSide: holdSide
-        };
-        await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
-        console.log(`[BOT] Posição de ${symbol} fechada com sucesso.`);
-    } catch (error) {
-        throw new Error(`Falha ao fechar posição: ${error.message}`);
-    }
+  try {
+    const orderData = {
+      symbol,
+      productType: 'USDT-FUTURES',
+      marginCoin: 'USDT',
+      holdSide
+    };
+    await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
+    console.log(`[BOT] Posição de ${symbol} (${holdSide}) fechada com sucesso.`);
+  } catch (error) {
+    throw new Error(`Falha ao fechar posição: ${error.message}`);
+  }
 };
 
-// 5. Abertura de Ordem
-const placeOrder = async (symbol, action, price, stopLoss, takeProfit, slPct, tpPct) => {
-    try {
-        const side = action === 'buy' ? 'buy' : 'sell';
-        const holdSide = action === 'buy' ? 'long' : 'short';
+const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
+  const side = action === 'buy' ? 'buy' : 'sell';
+  const holdSide = action === 'buy' ? 'long' : 'short';
+  const leverage = getLeverageForSymbol(symbol);
 
-        let alavancagem = 10;
-        if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) alavancagem = 5;
-        await setLeverage(symbol, alavancagem, holdSide);
+  await setLeverage(symbol, leverage, holdSide);
+  await getAvailableBalance();
 
-        await getAvailableBalance(); 
+  const marginToUse = 10;
+  let size = (marginToUse * leverage) / Number(price);
+  if (symbol.includes('BTC')) size = size.toFixed(3);
+  else if (symbol.includes('ETH')) size = size.toFixed(2);
+  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
+  else size = size.toFixed(1);
 
-        const marginToUse = 10; 
-        let size = (marginToUse * alavancagem) / price;
-        if (symbol.includes('BTC')) size = size.toFixed(3);
-        else if (symbol.includes('ETH')) size = size.toFixed(2);
-        else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
-        else size = size.toFixed(1);
+  const orderData = {
+    symbol,
+    productType: 'USDT-FUTURES',
+    marginMode: 'isolated',
+    marginCoin: 'USDT',
+    size: size.toString(),
+    price: String(price),
+    side,
+    orderType: 'market',
+    holdSide,
+    tradeSide: 'open'
+  };
 
-        let orderData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginMode: 'isolated',
-            marginCoin: 'USDT',
-            size: size.toString(),
-            price: price.toString(),
-            side: side,
-            orderType: 'market',
-            holdSide: holdSide,
-            tradeSide: 'open' // Parâmetro obrigatório adicionado para Hedge Mode
-        };
+  await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
+  await sleep(2000);
 
-        await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-        await sleep(2000);
+  const posTpslData = {
+    symbol,
+    productType: 'USDT-FUTURES',
+    marginCoin: 'USDT',
+    holdSide,
+    stopSurplusTriggerPrice: String(takeProfit),
+    stopSurplusTriggerType: 'mark_price',
+    stopLossTriggerPrice: String(stopLoss),
+    stopLossTriggerType: 'mark_price'
+  };
 
-        let posTpslData = {
-            symbol: symbol,
-            productType: 'USDT-FUTURES',
-            marginCoin: 'USDT',
-            holdSide: holdSide,
-            stopSurplusTriggerPrice: takeProfit.toString(),
-            stopSurplusTriggerType: 'mark_price',
-            stopLossTriggerPrice: stopLoss.toString(),
-            stopLossTriggerType: 'mark_price'
-        };
-
-        await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
-
-    } catch (error) {
-        throw error;
-    }
+  await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
 };
 
-// 6. Processamento do Sinal
+const buildSignalDetails = (body) => {
+  const symbol = getPayloadSymbol(body);
+  const timeframe = body.timeframe || '-';
+  const tradeDir = getTradeDir(body);
+  const leverage = `${getLeverageForSymbol(symbol)}x`;
+  const entryTime = getEntryTime(body);
+  const price = formatNumber(body.price, 6);
+  const takeProfit = formatNumber(body.takeProfit, 6);
+  const stopLoss = formatNumber(body.stopLoss, 6);
+  const tpPct = body.tpPct ?? '-';
+  const slPct = body.slPct ?? '-';
+  const wins = body.wins ?? 0;
+  const losses = body.losses ?? 0;
+  const winRate = body.winRate ?? 0;
+  const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${symbol}?type=futures`;
+
+  return {
+    symbol,
+    leverage,
+    tradeDir,
+    details:
+      `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
+      `⏱ *Timeframe:* ${escapeMarkdown(String(timeframe))}\n` +
+      `🧭 *Direção:* ${escapeMarkdown(tradeDir)}\n` +
+      `🕒 *Horário Entrada:* ${escapeMarkdown(String(entryTime))}\n` +
+      `⚙️ *Alavancagem:* ${escapeMarkdown(leverage)}\n\n` +
+      `💰 *Entrada:* \`${escapeMarkdown(price)}\`\n` +
+      `🎯 *Take Profit:* \`${escapeMarkdown(takeProfit)}\` \(${escapeMarkdown(String(tpPct))}%\)\n` +
+      `🛑 *Stop Loss:* \`${escapeMarkdown(stopLoss)}\` \(${escapeMarkdown(String(slPct))}%\)\n` +
+      `📊 *Placar Geral:* ${escapeMarkdown(String(wins))}W \- ${escapeMarkdown(String(losses))}L \(${escapeMarkdown(String(winRate))}%\)\n` +
+      `🔗 [Operar na Bitget](${bitgetLink})\n`
+  };
+};
+
+const translateBitgetError = (message = '') => {
+  let motivoErro = message;
+  if (motivoErro.includes('insufficient balance') || motivoErro.includes('balance')) {
+    motivoErro = 'Saldo insuficiente para abrir esta operação.';
+  } else if (motivoErro.includes('size')) {
+    motivoErro = 'O valor da entrada é menor que o mínimo permitido pela corretora.';
+  }
+  return motivoErro;
+};
+
 const handleSignal = async (body) => {
-    let normalizedSymbol = '';
-    let signalDetails = ''; 
-    try {
-        const { action, symbol, price, stopLoss, takeProfit, slPct, tpPct, timeframe, wins, losses, winRate } = body;
-        if (!action || !symbol || !price || !stopLoss || !takeProfit) return;
+  let signalDetails = '';
+  let symbol = '';
 
-        normalizedSymbol = symbol.replace('_', '').toUpperCase();
-        const tipo = action === 'buy' ? 'COMPRA (LONG)' : 'VENDA (SHORT)';
-        const emoji = action === 'buy' ? '🟢' : '🔴';
-        const bitgetLink = `https://www.bitget.com/pt-BR/mix/usdt/${normalizedSymbol}?type=futures`;
+  try {
+    const { action, price, stopLoss, takeProfit } = body;
+    symbol = getPayloadSymbol(body);
+    if (!action || !symbol || !price || !stopLoss || !takeProfit) return;
 
-        let alavancagemTexto = '10x';
-        if (normalizedSymbol.includes('XRP') || normalizedSymbol.includes('ADA') || normalizedSymbol.includes('DOGE') || normalizedSymbol.includes('ICP')) alavancagemTexto = '5x';
+    const tipo = action === 'buy' ? 'COMPRA \(LONG\)' : 'VENDA \(SHORT\)';
+    const emoji = action === 'buy' ? '🟢' : '🔴';
+    const built = buildSignalDetails(body);
+    signalDetails = built.details;
 
-        signalDetails = `📌 *Par:* ${normalizedSymbol}\n⏱ *Timeframe:* ${timeframe}\n⚙️ *Alavancagem:* ${alavancagemTexto}\n\n💰 *Entrada:* \`${price}\`\n🎯 *Take Profit:* \`${takeProfit}\` (${tpPct > 0 ? '+' : ''}${tpPct}%)\n🛑 *Stop Loss:* \`${stopLoss}\` (${slPct > 0 ? '-' : ''}${slPct}%)\n📊 *Placar Geral:* ${wins}W - ${losses}L (${winRate}%)\n🔗 [Operar na Bitget: Clique aqui](${bitgetLink})\n`;
+    const vipMsg = `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal gerado por IA_`;
+    await sendTelegram(telegramChatId, vipMsg);
 
-        const vipMsg = `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal gerado por IA_`;
-        await bot.sendMessage(telegramChatId, vipMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+    const openPosition = await getOpenPositionData(symbol);
+    const newHoldSide = action === 'buy' ? 'long' : 'short';
 
-        const openPosition = await getOpenPositionData(normalizedSymbol);
-        if (openPosition) {
-            const currentHoldSide = openPosition.holdSide; 
-            const newHoldSide = action === 'buy' ? 'long' : 'short';
+    if (openPosition) {
+      const currentHoldSide = openPosition.holdSide;
 
-            if (currentHoldSide === newHoldSide) {
-                const adminMsg = `⚠️ *SINAL IGNORADO (POSIÇÃO DUPLICADA)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção._`;
-                await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-                return; 
-            } else {
-                const adminMsgReversao = `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${normalizedSymbol}\n_Fechando posição anterior para abrir a nova..._`;
-                await bot.sendMessage(telegramAdminChatId, adminMsgReversao, { parse_mode: 'Markdown', disable_web_page_preview: true });
+      if (currentHoldSide === newHoldSide) {
+        const adminMsg = `⚠️ *SINAL IGNORADO \(POSIÇÃO DUPLICADA\)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção\._`;
+        await sendTelegram(telegramAdminChatId, adminMsg);
+        return;
+      }
 
-                await closePosition(normalizedSymbol, currentHoldSide);
-                await sleep(2000); 
-            }
-        }
-
-        await placeOrder(normalizedSymbol, action, price, stopLoss, takeProfit, slPct, tpPct);
-
-        if (await getOpenPositionData(normalizedSymbol)) { 
-            const adminMsg = `✅ *ORDEM EXECUTADA COM SUCESSO*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Status: Ordem automática protegida com TP/SL!_`;
-            await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-        }
-    } catch (error) {
-        let motivoErro = error.message;
-
-        // Traduzindo os erros da Bitget para Português
-        if (motivoErro.includes('insufficient balance') || motivoErro.includes('balance')) {
-            motivoErro = "Saldo insuficiente para abrir esta operação.";
-        } else if (motivoErro.includes('size')) {
-            motivoErro = "O valor da entrada é menor que o mínimo permitido pela corretora.";
-        }
-
-        const fallbackDetails = signalDetails || `📌 *Par:* ${normalizedSymbol || 'Desconhecido'}\n`;
-        const adminMsg = `❌ *ERRO AO EXECUTAR ORDEM*\n━━━━━━━━━━━━━━━━━━━━\n${fallbackDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: ${motivoErro}_`;
-
-        await bot.sendMessage(telegramAdminChatId, adminMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
+      const adminMsgReversao = `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${escapeMarkdown(symbol)}\n🔁 *Fechando posição anterior* para abrir nova posição em *${escapeMarkdown(getTradeDir(body))}*\.`;
+      await sendTelegram(telegramAdminChatId, adminMsgReversao);
+      await closePosition(symbol, currentHoldSide);
+      await sleep(2000);
     }
+
+    await placeOrder(symbol, action, price, stopLoss, takeProfit);
+
+    if (await getOpenPositionData(symbol)) {
+      const adminMsg = `✅ *ORDEM EXECUTADA COM SUCESSO*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Status: Ordem automática protegida com TP/SL\!_`;
+      await sendTelegram(telegramAdminChatId, adminMsg);
+    }
+  } catch (error) {
+    const motivoErro = translateBitgetError(error.message);
+    const fallbackDetails = signalDetails || `📌 *Par:* ${escapeMarkdown(symbol || 'Desconhecido')}\n`;
+    const adminMsg = `❌ *ERRO AO EXECUTAR ORDEM*\n━━━━━━━━━━━━━━━━━━━━\n${fallbackDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: ${escapeMarkdown(motivoErro)}_`;
+    await sendTelegram(telegramAdminChatId, adminMsg);
+  }
 };
 
-// 7. Webhook
-app.post('/webhook-bot', async (req, res) => {
-    try {
-        const body = req.body;
+const handleCloseAlert = async (body) => {
+  const symbol = getPayloadSymbol(body);
+  const pair = escapeMarkdown(symbol);
+  const timeframe = escapeMarkdown(String(body.timeframe || '-'));
+  const tradeDir = escapeMarkdown(String(body.trade_dir || body.tradeDir || 'N/D'));
+  const entryPrice = escapeMarkdown(formatNumber(body.entry_price, 6));
+  const exitPrice = escapeMarkdown(formatNumber(body.exit_price, 6));
+  const resultText = escapeMarkdown(String(body.result_text || '-'));
+  const resultIcon = String(body.result_icon || 'ℹ️');
+  const entryTime = escapeMarkdown(String(getEntryTime(body)));
+  const exitTime = escapeMarkdown(String(getExitTime(body)));
+  const placar = String(body.placar_str || '').replace('📊 *Placar Geral:* ', '').trim();
+  const placarEscaped = escapeMarkdown(placar);
 
-        if (body.action === 'close' || (body.result_icon && body.placar_str)) {
-            if (body.symbol) {
-                const normalizedSymbol = body.symbol.replace('_', '').toUpperCase();
-                const openPosition = await getOpenPositionData(normalizedSymbol);
-                if (openPosition) {
-                    try {
-                        await closePosition(normalizedSymbol, openPosition.holdSide);
-                        console.log(`[BOT] Posição fechada via Webhook (Trailing Stop).`);
-                    } catch (e) {
-                        console.error('[BOT] Erro ao tentar fechar posição no webhook:', e.message);
-                    }
-                }
-            }
-
-            const exitMsg = body.result_icon + "\n" +
-                            "━━━━━━━━━━━━━━━━━━━━\n" +
-                            "📌 *Par:* "        + body.pair_name + "\n" +
-                            "⏱ *Timeframe:* "  + body.timeframe + "\n" +
-                            "🔄 *Operação:* "   + body.trade_dir + "\n" +
-                            "💰 *Entrada:* `"   + body.entry_price + "`\n" +
-                            "🏁 *Saída:* `"     + body.exit_price + "`\n" +
-                            "💵 *Resultado:* "  + body.result_text + "\n" +
-                            "━━━━━━━━━━━━━━━━━━━━" + body.placar_str;
-
-            await bot.sendMessage(telegramChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-            await bot.sendMessage(telegramAdminChatId, exitMsg, { parse_mode: 'Markdown', disable_web_page_preview: true });
-
-        } else if (body.action === 'buy' || body.action === 'sell') {
-            await handleSignal(body);
-        }
-
-        res.status(200).send('OK');
-    } catch (error) {
-        console.error('[BOT] Erro no webhook:', error);
-        res.status(500).send('Erro interno do servidor');
+  if (symbol) {
+    const openPosition = await getOpenPositionData(symbol);
+    if (openPosition) {
+      try {
+        await closePosition(symbol, openPosition.holdSide);
+        console.log('[BOT] Posição fechada via webhook de saída.');
+      } catch (e) {
+        console.error('[BOT] Erro ao tentar fechar posição no webhook:', e.message);
+      }
     }
+  }
+
+  const exitMsg = `${resultIcon}\n━━━━━━━━━━━━━━━━━━━━\n` +
+    `📌 *Par:* ${pair}\n` +
+    `⏱ *Timeframe:* ${timeframe}\n` +
+    `🔄 *Operação:* ${tradeDir}\n` +
+    `🕒 *Entrada:* ${entryTime}\n` +
+    `🕓 *Saída:* ${exitTime}\n` +
+    `💰 *Preço Entrada:* \`${entryPrice}\`\n` +
+    `🏁 *Preço Saída:* \`${exitPrice}\`\n` +
+    `💵 *Resultado:* ${resultText}\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `${placarEscaped}`;
+
+  await sendTelegram(telegramChatId, exitMsg);
+  await sendTelegram(telegramAdminChatId, exitMsg);
+
+  if (body.reversal_info) {
+    const reversalAdmin = `🔄 *FECHAMENTO POR REVERSÃO*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${pair}\nℹ️ ${escapeMarkdown(String(body.reversal_info))}`;
+    await sendTelegram(telegramAdminChatId, reversalAdmin);
+  }
+};
+
+const handleVipReversalAlert = async (body) => {
+  const pair = escapeMarkdown(getPayloadSymbol(body));
+  const timeframe = escapeMarkdown(String(body.timeframe || '-'));
+  const oldPosition = escapeMarkdown(String(body.old_position || '-'));
+  const newSignal = escapeMarkdown(String(body.new_signal || '-'));
+  const entryTime = escapeMarkdown(String(getEntryTime(body)));
+  const customMessage = escapeMarkdown(String(body.message || 'Reversão confirmada.'));
+
+  const vipReversalMsg = `🚨 *ALERTA DE REVERSÃO VIP*\n━━━━━━━━━━━━━━━━━━━━\n` +
+    `📌 *Par:* ${pair}\n` +
+    `⏱ *Timeframe:* ${timeframe}\n` +
+    `📤 *Posição Anterior:* ${oldPosition}\n` +
+    `📥 *Novo Sinal:* ${newSignal}\n` +
+    `🕒 *Horário:* ${entryTime}\n\n` +
+    `${customMessage}`;
+
+  await sendTelegram(telegramChatId, vipReversalMsg);
+  await sendTelegram(telegramAdminChatId, vipReversalMsg);
+};
+
+app.post('/webhook-bot', async (req, res) => {
+  try {
+    const body = req.body || {};
+    console.log('[BOT] Webhook recebido:', JSON.stringify(body));
+
+    if (body.action === 'close' || (body.result_icon && body.placar_str)) {
+      await handleCloseAlert(body);
+    } else if (body.action === 'reversal_alert_vip') {
+      await handleVipReversalAlert(body);
+    } else if (body.action === 'buy' || body.action === 'sell') {
+      await handleSignal(body);
+    } else {
+      console.log('[BOT] Ação ignorada:', body.action);
+    }
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('[BOT] Erro no webhook:', error);
+    res.status(500).send('Erro interno do servidor');
+  }
 });
 
-app.get('/', (req, res) => { res.status(200).send('Bot de sinais está online!'); });
+app.get('/', (req, res) => {
+  res.status(200).send('Bot de sinais está online!');
+});
+
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => { console.log(`Servidor na porta ${PORT}`); });
+app.listen(PORT, () => {
+  console.log(`Servidor na porta ${PORT}`);
+});
