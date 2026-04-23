@@ -20,6 +20,9 @@ const bitgetApiUrl = 'https://api.bitget.com';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const PRODUCT_TYPE = 'USDT-FUTURES';
+const MARGIN_COIN = 'USDT';
+
 const escapeMarkdown = (text = '') => String(text)
   .replace(/\\/g, '\\\\')
   .replace(/_/g, '\\_')
@@ -54,19 +57,19 @@ const sendTelegramPlain = async (chatId, text) => {
   });
 };
 
-const safeSendMarkdown = async (chatId, message) => {
+const safeSendMarkdown = async (chatId, text) => {
   try {
-    await sendTelegramMarkdown(chatId, message);
+    await sendTelegramMarkdown(chatId, text);
   } catch (error) {
-    console.error('[BOT] Falha ao enviar Telegram Markdown:', error.message);
+    console.error('[BOT] Falha Telegram Markdown:', error.message);
   }
 };
 
-const safeSendPlain = async (chatId, message) => {
+const safeSendPlain = async (chatId, text) => {
   try {
-    await sendTelegramPlain(chatId, message);
+    await sendTelegramPlain(chatId, text);
   } catch (error) {
-    console.error('[BOT] Falha ao enviar Telegram texto puro:', error.message);
+    console.error('[BOT] Falha Telegram texto puro:', error.message);
   }
 };
 
@@ -76,18 +79,17 @@ const formatNumber = (value, decimals = 4) => {
   return num.toFixed(decimals).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 };
 
-const normalizeSymbol = (raw) => String(raw || '').replace('_', '').toUpperCase();
+const normalizeSymbol = (raw) => String(raw || '').replace(/_/g, '').toUpperCase();
 const getPayloadSymbol = (body) => normalizeSymbol(body.symbol || body.pair_name);
 const getTradeDir = (body) =>
   body.tradeDir ||
   body.trade_dir ||
   (body.action === 'buy' ? 'LONG' : body.action === 'sell' ? 'SHORT' : 'N/D');
-
 const getEntryTime = (body) => body.entryTime || body.entry_time || '-';
 const getExitTime = (body) => body.exitTime || body.exit_time || '-';
 
 const getLeverageForSymbol = (symbol) => {
-  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) return 5;
+  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP') || symbol.includes('TRX')) return 5;
   return 10;
 };
 
@@ -131,11 +133,145 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
   }
 };
 
+const validateNumeric = (value, label) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    throw new Error(`${label} inválido: ${value}`);
+  }
+  return num;
+};
+
+const roundDown = (value, decimals) => {
+  const factor = 10 ** decimals;
+  return Math.floor(Number(value) * factor) / factor;
+};
+
+const roundUp = (value, decimals) => {
+  const factor = 10 ** decimals;
+  return Math.ceil(Number(value) * factor) / factor;
+};
+
+const roundNearest = (value, decimals) => {
+  const factor = 10 ** decimals;
+  return Math.round(Number(value) * factor) / factor;
+};
+
+const fallbackSymbolRules = {
+  BTCUSDT: { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 3, minSize: 0.001 },
+  ETHUSDT: { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 2, minSize: 0.01 },
+  SOLUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 1, minSize: 0.1 },
+  ZECUSDT: { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 2, minSize: 0.01 },
+  SUIUSDT: { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 1, minSize: 0.1 },
+  AVAXUSDT: { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 2, minSize: 0.01 },
+  XRPUSDT: { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 0, minSize: 1 },
+  ADAUSDT: { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 0, minSize: 1 },
+  DOTUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 1, minSize: 0.1 },
+  BGBUSDT: { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 1, minSize: 0.1 },
+  ICPUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 1, minSize: 0.1 },
+  TRXUSDT: { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 0, minSize: 1 },
+  LINKUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 2, minSize: 0.01 },
+  UNIUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 2, minSize: 0.01 },
+  ETCUSDT: { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 2, minSize: 0.01 },
+  ATOMUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 2, minSize: 0.01 },
+  NEARUSDT: { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 2, minSize: 0.01 }
+};
+
+const symbolConfigCache = new Map();
+
+const getFallbackRuleByPattern = (symbol) => {
+  if (fallbackSymbolRules[symbol]) return fallbackSymbolRules[symbol];
+
+  if (symbol.includes('BTC')) return { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 3, minSize: 0.001 };
+  if (symbol.includes('ETH')) return { priceDecimals: 2, triggerDecimals: 2, sizeDecimals: 2, minSize: 0.01 };
+  if (symbol.includes('SOL')) return { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 1, minSize: 0.1 };
+  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('TRX')) {
+    return { priceDecimals: 4, triggerDecimals: 4, sizeDecimals: 0, minSize: 1 };
+  }
+
+  return { priceDecimals: 3, triggerDecimals: 3, sizeDecimals: 2, minSize: 0.01 };
+};
+
+const getAllBitgetContracts = async () => {
+  try {
+    const response = await bitgetRequest('GET', `/api/v2/mix/market/contracts?productType=${PRODUCT_TYPE}`);
+    return Array.isArray(response?.data) ? response.data : [];
+  } catch (error) {
+    console.error('[BOT] Falha ao buscar contratos:', error.message);
+    return [];
+  }
+};
+
+const getSymbolRuntimeConfig = async (symbol) => {
+  const normalized = normalizeSymbol(symbol);
+
+  if (symbolConfigCache.has(normalized)) {
+    return symbolConfigCache.get(normalized);
+  }
+
+  const fallback = getFallbackRuleByPattern(normalized);
+
+  try {
+    const contracts = await getAllBitgetContracts();
+    const found = contracts.find(item => normalizeSymbol(item.symbol) === normalized);
+
+    if (!found) {
+      symbolConfigCache.set(normalized, fallback);
+      return fallback;
+    }
+
+    const priceDecimals =
+      Number.isInteger(Number(found.pricePlace)) ? Number(found.pricePlace)
+      : Number.isInteger(Number(found.priceEndStep)) ? Number(found.priceEndStep)
+      : fallback.priceDecimals;
+
+    const triggerDecimals =
+      Number.isInteger(Number(found.pricePlace)) ? Number(found.pricePlace)
+      : fallback.triggerDecimals;
+
+    let sizeDecimals = fallback.sizeDecimals;
+
+    const sizeMultiplier = String(found.sizeMultiplier ?? '');
+    if (sizeMultiplier.includes('.')) {
+      sizeDecimals = Math.max(sizeMultiplier.split('.')[1].replace(/0+$/, '').length, 0);
+    } else if (Number.isInteger(Number(found.volumePlace))) {
+      sizeDecimals = Number(found.volumePlace);
+    }
+
+    const minSize = Number(found.minTradeNum || found.minTradeAmount || fallback.minSize) || fallback.minSize;
+
+    const config = {
+      priceDecimals,
+      triggerDecimals,
+      sizeDecimals,
+      minSize
+    };
+
+    symbolConfigCache.set(normalized, config);
+    return config;
+  } catch (error) {
+    symbolConfigCache.set(normalized, fallback);
+    return fallback;
+  }
+};
+
+const normalizePrice = (value, decimals) => roundNearest(value, decimals);
+const normalizeTrigger = (value, decimals, direction = 'nearest') => {
+  if (direction === 'down') return roundDown(value, decimals);
+  if (direction === 'up') return roundUp(value, decimals);
+  return roundNearest(value, decimals);
+};
+
+const normalizeSize = (value, decimals, minSize = 0) => {
+  const rounded = roundDown(value, decimals);
+  const finalValue = Math.max(rounded, Number(minSize || 0));
+  return Number(finalValue.toFixed(decimals));
+};
+
 const getAvailableBalance = async () => {
   try {
     const response = await bitgetRequest(
       'GET',
-      '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT'
+      `/api/v2/mix/account/account?productType=${PRODUCT_TYPE}&marginCoin=${MARGIN_COIN}`
     );
 
     if (response && response.data) {
@@ -156,12 +292,12 @@ const getOpenPositionData = async (symbol) => {
   try {
     const response = await bitgetRequest(
       'GET',
-      `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`
+      `/api/v2/mix/position/single-position?symbol=${symbol}&productType=${PRODUCT_TYPE}&marginCoin=${MARGIN_COIN}`
     );
 
     if (response && response.data && Array.isArray(response.data)) {
       const positions = response.data.filter(
-        pos => pos.symbol === symbol && parseFloat(pos.total) > 0
+        pos => normalizeSymbol(pos.symbol) === normalizeSymbol(symbol) && parseFloat(pos.total) > 0
       );
       if (positions.length > 0) return positions[0];
     }
@@ -176,20 +312,14 @@ const getMarkPrice = async (symbol) => {
   try {
     const response = await bitgetRequest(
       'GET',
-      `/api/v2/mix/market/ticker?symbol=${symbol}&productType=USDT-FUTURES`
+      `/api/v2/mix/market/ticker?symbol=${symbol}&productType=${PRODUCT_TYPE}`
     );
 
     const ticker = Array.isArray(response?.data) ? response.data[0] : response?.data;
-    const candidates = [
-      ticker?.markPrice,
-      ticker?.mark_price,
-      ticker?.lastPr,
-      ticker?.last,
-      ticker?.price
-    ];
+    const candidates = [ticker?.markPrice, ticker?.lastPr, ticker?.last, ticker?.price];
 
-    for (const value of candidates) {
-      const num = Number(value);
+    for (const candidate of candidates) {
+      const num = Number(candidate);
       if (Number.isFinite(num) && num > 0) return num;
     }
 
@@ -204,8 +334,8 @@ const setLeverage = async (symbol, leverage, holdSide) => {
   try {
     await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
       symbol,
-      productType: 'USDT-FUTURES',
-      marginCoin: 'USDT',
+      productType: PRODUCT_TYPE,
+      marginCoin: MARGIN_COIN,
       leverage: leverage.toString(),
       holdSide
     });
@@ -218,141 +348,14 @@ const closePosition = async (symbol, holdSide) => {
   try {
     await bitgetRequest('POST', '/api/v2/mix/order/close-positions', {
       symbol,
-      productType: 'USDT-FUTURES',
-      marginCoin: 'USDT',
+      productType: PRODUCT_TYPE,
+      marginCoin: MARGIN_COIN,
       holdSide
     });
     console.log(`[BOT] Posição ${symbol} (${holdSide}) fechada.`);
   } catch (error) {
     throw new Error(`Falha ao fechar posição: ${error.message}`);
   }
-};
-
-const validateNumeric = (value, label) => {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) {
-    throw new Error(`${label} inválido: ${value}`);
-  }
-  return num;
-};
-
-const adjustTpslToSafeSide = (action, entryPrice, stopLoss, takeProfit, markPrice) => {
-  const entry = validateNumeric(entryPrice, 'Preço de entrada');
-  let sl = validateNumeric(stopLoss, 'Stop loss');
-  let tp = validateNumeric(takeProfit, 'Take profit');
-  const mark = Number(markPrice);
-
-  if (action === 'buy') {
-    if (sl >= entry) sl = entry * 0.995;
-    if (tp <= entry) tp = entry * 1.005;
-    if (Number.isFinite(mark) && sl >= mark) sl = mark * 0.995;
-    if (Number.isFinite(mark) && tp <= mark) tp = Math.max(tp, mark * 1.005);
-  } else {
-    if (sl <= entry) sl = entry * 1.005;
-    if (tp >= entry) tp = entry * 0.995;
-    if (Number.isFinite(mark) && sl <= mark) sl = mark * 1.005;
-    if (Number.isFinite(mark) && tp >= mark) tp = Math.min(tp, mark * 0.995);
-  }
-
-  if (action === 'buy' && !(sl < entry && tp > entry)) {
-    throw new Error('Não foi possível ajustar SL/TP de forma segura para LONG.');
-  }
-
-  if (action === 'sell' && !(sl > entry && tp < entry)) {
-    throw new Error('Não foi possível ajustar SL/TP de forma segura para SHORT.');
-  }
-
-  if (Number.isFinite(mark)) {
-    if (action === 'buy' && !(sl < mark)) {
-      throw new Error('Stop loss para LONG continua inválido em relação ao mark price.');
-    }
-    if (action === 'sell' && !(sl > mark)) {
-      throw new Error('Stop loss para SHORT continua inválido em relação ao mark price.');
-    }
-  }
-
-  return {
-    stopLoss: Number(sl.toFixed(6)),
-    takeProfit: Number(tp.toFixed(6))
-  };
-};
-
-const placeEntryOrder = async (symbol, action, price) => {
-  const side = action === 'buy' ? 'buy' : 'sell';
-  const holdSide = action === 'buy' ? 'long' : 'short';
-  const leverage = getLeverageForSymbol(symbol);
-
-  await setLeverage(symbol, leverage, holdSide);
-  await getAvailableBalance();
-
-  const marginToUse = 10;
-  let size = (marginToUse * leverage) / Number(price);
-
-  if (symbol.includes('BTC')) size = size.toFixed(3);
-  else if (symbol.includes('ETH')) size = size.toFixed(2);
-  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
-  else size = size.toFixed(1);
-
-  await bitgetRequest('POST', '/api/v2/mix/order/place-order', {
-    symbol,
-    productType: 'USDT-FUTURES',
-    marginMode: 'isolated',
-    marginCoin: 'USDT',
-    size: size.toString(),
-    price: String(price),
-    side,
-    orderType: 'market',
-    holdSide,
-    tradeSide: 'open'
-  });
-
-  return { holdSide, leverage, size: size.toString() };
-};
-
-const placePositionTpsl = async (symbol, holdSide, stopLoss, takeProfit) => {
-  return bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', {
-    symbol,
-    productType: 'USDT-FUTURES',
-    marginCoin: 'USDT',
-    holdSide,
-    stopSurplusTriggerPrice: String(takeProfit),
-    stopSurplusTriggerType: 'mark_price',
-    stopLossTriggerPrice: String(stopLoss),
-    stopLossTriggerType: 'mark_price'
-  });
-};
-
-const ensureProtectedPosition = async ({ symbol, action, price, stopLoss, takeProfit, holdSide }) => {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      await sleep(attempt === 1 ? 1500 : 2500);
-
-      const markPrice = await getMarkPrice(symbol);
-      const adjusted = adjustTpslToSafeSide(action, price, stopLoss, takeProfit, markPrice);
-
-      await placePositionTpsl(symbol, holdSide, adjusted.stopLoss, adjusted.takeProfit);
-
-      await sleep(1200);
-
-      return {
-        ok: true,
-        stopLoss: adjusted.stopLoss,
-        takeProfit: adjusted.takeProfit,
-        markPrice
-      };
-    } catch (error) {
-      lastError = error;
-      console.error(`[BOT] Tentativa ${attempt} de TP/SL falhou:`, error.message);
-      await sleep(1000);
-    }
-  }
-
-  return {
-    ok: false,
-    error: lastError
-  };
 };
 
 const buildSignalDetails = (body) => {
@@ -400,9 +403,161 @@ const translateBitgetError = (message = '') => {
     motivoErro = 'Stop loss inválido para LONG: ele precisa estar abaixo do preço de marca.';
   } else if (motivoErro.includes('Stop price for short positions please > mark price')) {
     motivoErro = 'Stop loss inválido para SHORT: ele precisa estar acima do preço de marca.';
+  } else if (motivoErro.includes('40808') || motivoErro.includes('checkBDScale')) {
+    motivoErro = 'Preço enviado com casas decimais inválidas para este ativo na Bitget.';
   }
 
   return motivoErro;
+};
+
+const prepareProtectedPrices = async ({ symbol, action, entryPrice, stopLoss, takeProfit }) => {
+  const cfg = await getSymbolRuntimeConfig(symbol);
+  const entry = validateNumeric(entryPrice, 'Preço de entrada');
+  let sl = validateNumeric(stopLoss, 'Stop Loss');
+  let tp = validateNumeric(takeProfit, 'Take Profit');
+  const mark = await getMarkPrice(symbol);
+
+  const normalizedEntry = normalizePrice(entry, cfg.priceDecimals);
+
+  if (action === 'buy') {
+    if (sl >= normalizedEntry) sl = normalizedEntry * 0.995;
+    if (tp <= normalizedEntry) tp = normalizedEntry * 1.005;
+    if (Number.isFinite(mark) && sl >= mark) sl = mark * 0.995;
+    if (Number.isFinite(mark) && tp <= mark) tp = Math.max(tp, mark * 1.005);
+
+    sl = normalizeTrigger(sl, cfg.triggerDecimals, 'down');
+    tp = normalizeTrigger(tp, cfg.triggerDecimals, 'up');
+
+    if (!(sl < normalizedEntry)) throw new Error('SL inválido para LONG após normalização.');
+    if (!(tp > normalizedEntry)) throw new Error('TP inválido para LONG após normalização.');
+    if (Number.isFinite(mark) && !(sl < mark)) throw new Error('SL inválido para LONG em relação ao mark price.');
+  } else {
+    if (sl <= normalizedEntry) sl = normalizedEntry * 1.005;
+    if (tp >= normalizedEntry) tp = normalizedEntry * 0.995;
+    if (Number.isFinite(mark) && sl <= mark) sl = mark * 1.005;
+    if (Number.isFinite(mark) && tp >= mark) tp = Math.min(tp, mark * 0.995);
+
+    sl = normalizeTrigger(sl, cfg.triggerDecimals, 'up');
+    tp = normalizeTrigger(tp, cfg.triggerDecimals, 'down');
+
+    if (!(sl > normalizedEntry)) throw new Error('SL inválido para SHORT após normalização.');
+    if (!(tp < normalizedEntry)) throw new Error('TP inválido para SHORT após normalização.');
+    if (Number.isFinite(mark) && !(sl > mark)) throw new Error('SL inválido para SHORT em relação ao mark price.');
+  }
+
+  return {
+    config: cfg,
+    entryPrice: normalizedEntry,
+    stopLoss: sl,
+    takeProfit: tp,
+    markPrice: mark
+  };
+};
+
+const calculateOrderSize = async (symbol, price) => {
+  const cfg = await getSymbolRuntimeConfig(symbol);
+  const leverage = getLeverageForSymbol(symbol);
+  const marginToUse = 10;
+
+  let size = (marginToUse * leverage) / Number(price);
+  size = normalizeSize(size, cfg.sizeDecimals, cfg.minSize);
+
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new Error(`Size calculado inválido para ${symbol}`);
+  }
+
+  return {
+    size: size.toFixed(cfg.sizeDecimals),
+    config: cfg
+  };
+};
+
+const placeEntryOrder = async (symbol, action, price) => {
+  const side = action === 'buy' ? 'buy' : 'sell';
+  const holdSide = action === 'buy' ? 'long' : 'short';
+  const leverage = getLeverageForSymbol(symbol);
+  const cfg = await getSymbolRuntimeConfig(symbol);
+  const normalizedPrice = normalizePrice(price, cfg.priceDecimals);
+
+  await setLeverage(symbol, leverage, holdSide);
+  await getAvailableBalance();
+
+  const sizeInfo = await calculateOrderSize(symbol, normalizedPrice);
+
+  await bitgetRequest('POST', '/api/v2/mix/order/place-order', {
+    symbol,
+    productType: PRODUCT_TYPE,
+    marginMode: 'isolated',
+    marginCoin: MARGIN_COIN,
+    size: sizeInfo.size.toString(),
+    price: String(normalizedPrice),
+    side,
+    orderType: 'market',
+    holdSide,
+    tradeSide: 'open'
+  });
+
+  return {
+    holdSide,
+    leverage,
+    size: sizeInfo.size,
+    config: sizeInfo.config,
+    normalizedPrice
+  };
+};
+
+const placePositionTpsl = async (symbol, holdSide, stopLoss, takeProfit) => {
+  return bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', {
+    symbol,
+    productType: PRODUCT_TYPE,
+    marginCoin: MARGIN_COIN,
+    holdSide,
+    stopSurplusTriggerPrice: String(takeProfit),
+    stopSurplusTriggerType: 'mark_price',
+    stopLossTriggerPrice: String(stopLoss),
+    stopLossTriggerType: 'mark_price'
+  });
+};
+
+const ensureProtectedPosition = async ({ symbol, action, entryPrice, stopLoss, takeProfit, holdSide }) => {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await sleep(attempt === 1 ? 1500 : 2500);
+
+      const prepared = await prepareProtectedPrices({
+        symbol,
+        action,
+        entryPrice,
+        stopLoss,
+        takeProfit
+      });
+
+      await placePositionTpsl(
+        symbol,
+        holdSide,
+        prepared.stopLoss,
+        prepared.takeProfit
+      );
+
+      await sleep(1200);
+
+      return {
+        ok: true,
+        stopLoss: prepared.stopLoss,
+        takeProfit: prepared.takeProfit,
+        markPrice: prepared.markPrice,
+        config: prepared.config
+      };
+    } catch (error) {
+      lastError = error;
+      console.error(`[BOT] Tentativa ${attempt} TP/SL falhou:`, error.message);
+      await sleep(900);
+    }
+  }
+
+  return { ok: false, error: lastError };
 };
 
 const handleSignal = async (body) => {
@@ -421,7 +576,7 @@ const handleSignal = async (body) => {
     signalDetails = built.details;
 
     const vipMsg =
-      `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal gerado por IA_`;
+      `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal automatizado_`;
 
     await safeSendMarkdown(telegramChatId, vipMsg);
 
@@ -434,7 +589,6 @@ const handleSignal = async (body) => {
       if (currentHoldSide === newHoldSide) {
         const adminMsg =
           `⚠️ *SINAL IGNORADO \\(POSIÇÃO DUPLICADA\\)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção\\._`;
-
         await safeSendMarkdown(telegramAdminChatId, adminMsg);
         return;
       }
@@ -453,7 +607,7 @@ const handleSignal = async (body) => {
     validateNumeric(stopLoss, 'Stop Loss');
     validateNumeric(takeProfit, 'Take Profit');
 
-    const entryResult = await placeEntryOrder(symbol, action, price);
+    const entryResult = await placeEntryOrder(symbol, action, Number(price));
     await sleep(2000);
 
     const confirmedPosition = await getOpenPositionData(symbol);
@@ -464,9 +618,9 @@ const handleSignal = async (body) => {
     const protection = await ensureProtectedPosition({
       symbol,
       action,
-      price,
-      stopLoss,
-      takeProfit,
+      entryPrice: entryResult.normalizedPrice,
+      stopLoss: Number(stopLoss),
+      takeProfit: Number(takeProfit),
       holdSide: entryResult.holdSide
     });
 
