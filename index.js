@@ -21,6 +21,7 @@ const bitgetApiUrl = 'https://api.bitget.com';
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const escapeMarkdown = (text = '') => String(text)
+  .replace(/\\/g, '\\\\')
   .replace(/_/g, '\\_')
   .replace(/\*/g, '\\*')
   .replace(/\[/g, '\\[')
@@ -40,11 +41,29 @@ const escapeMarkdown = (text = '') => String(text)
   .replace(/\./g, '\\.')
   .replace(/!/g, '\\!');
 
-const sendTelegram = async (chatId, text) => {
-  await bot.sendMessage(chatId, text, {
-    parse_mode: 'MarkdownV2',
-    disable_web_page_preview: true
-  });
+const sendTelegramMarkdown = async (chatId, text) => {
+  try {
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'MarkdownV2',
+      disable_web_page_preview: true
+    });
+  } catch (error) {
+    const errorInfo = error?.response?.body || error?.response?.data || error.message;
+    console.error('[BOT] Erro ao enviar Telegram Markdown:', errorInfo);
+    throw error;
+  }
+};
+
+const sendTelegramPlain = async (chatId, text) => {
+  try {
+    await bot.sendMessage(chatId, text, {
+      disable_web_page_preview: true
+    });
+  } catch (error) {
+    const errorInfo = error?.response?.body || error?.response?.data || error.message;
+    console.error('[BOT] Erro ao enviar Telegram texto puro:', errorInfo);
+    throw error;
+  }
 };
 
 const formatNumber = (value, decimals = 4) => {
@@ -55,12 +74,20 @@ const formatNumber = (value, decimals = 4) => {
 
 const normalizeSymbol = (raw) => String(raw || '').replace('_', '').toUpperCase();
 const getPayloadSymbol = (body) => normalizeSymbol(body.symbol || body.pair_name);
-const getTradeDir = (body) => body.tradeDir || body.trade_dir || (body.action === 'buy' ? 'LONG' : body.action === 'sell' ? 'SHORT' : 'N/D');
+const getTradeDir = (body) =>
+  body.tradeDir ||
+  body.trade_dir ||
+  (body.action === 'buy' ? 'LONG' : body.action === 'sell' ? 'SHORT' : 'N/D');
 const getEntryTime = (body) => body.entryTime || body.entry_time || '-';
 const getExitTime = (body) => body.exitTime || body.exit_time || '-';
 
 const getLeverageForSymbol = (symbol) => {
-  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) return 5;
+  if (
+    symbol.includes('XRP') ||
+    symbol.includes('ADA') ||
+    symbol.includes('DOGE') ||
+    symbol.includes('ICP')
+  ) return 5;
   return 10;
 };
 
@@ -90,7 +117,10 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
     const response = await axios(config);
     return response.data;
   } catch (error) {
-    const errorDetails = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
+    const errorDetails = error.response && error.response.data
+      ? JSON.stringify(error.response.data)
+      : error.message;
+
     console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
     throw new Error(errorDetails);
   }
@@ -98,7 +128,11 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
 
 const getAvailableBalance = async () => {
   try {
-    const response = await bitgetRequest('GET', '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT');
+    const response = await bitgetRequest(
+      'GET',
+      '/api/v2/mix/account/account?productType=USDT-FUTURES&marginCoin=USDT'
+    );
+
     if (response && response.data) {
       const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
       if (accountData && accountData.available !== undefined) {
@@ -107,6 +141,7 @@ const getAvailableBalance = async () => {
         return saldo;
       }
     }
+
     return 0;
   } catch (error) {
     console.error('[BOT] Erro ao buscar saldo:', error.message);
@@ -116,11 +151,18 @@ const getAvailableBalance = async () => {
 
 const getOpenPositionData = async (symbol) => {
   try {
-    const response = await bitgetRequest('GET', `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`);
+    const response = await bitgetRequest(
+      'GET',
+      `/api/v2/mix/position/single-position?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`
+    );
+
     if (response && response.data && Array.isArray(response.data)) {
-      const positions = response.data.filter(pos => pos.symbol === symbol && parseFloat(pos.total) > 0);
+      const positions = response.data.filter(
+        pos => pos.symbol === symbol && parseFloat(pos.total) > 0
+      );
       if (positions.length > 0) return positions[0];
     }
+
     return null;
   } catch (error) {
     return null;
@@ -136,6 +178,7 @@ const setLeverage = async (symbol, leverage, holdSide) => {
       leverage: leverage.toString(),
       holdSide
     };
+
     await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
   } catch (error) {
     console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
@@ -150,6 +193,7 @@ const closePosition = async (symbol, holdSide) => {
       marginCoin: 'USDT',
       holdSide
     };
+
     await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
     console.log(`[BOT] Posição de ${symbol} (${holdSide}) fechada com sucesso.`);
   } catch (error) {
@@ -167,10 +211,14 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
 
   const marginToUse = 10;
   let size = (marginToUse * leverage) / Number(price);
+
   if (symbol.includes('BTC')) size = size.toFixed(3);
   else if (symbol.includes('ETH')) size = size.toFixed(2);
-  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
-  else size = size.toFixed(1);
+  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
+    size = Math.floor(size).toString();
+  } else {
+    size = size.toFixed(1);
+  }
 
   const orderData = {
     symbol,
@@ -222,6 +270,7 @@ const buildSignalDetails = (body) => {
     symbol,
     leverage,
     tradeDir,
+    bitgetLink,
     details:
       `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
       `⏱ *Timeframe:* ${escapeMarkdown(String(timeframe))}\n` +
@@ -229,21 +278,39 @@ const buildSignalDetails = (body) => {
       `🕒 *Horário Entrada:* ${escapeMarkdown(String(entryTime))}\n` +
       `⚙️ *Alavancagem:* ${escapeMarkdown(leverage)}\n\n` +
       `💰 *Entrada:* \`${escapeMarkdown(price)}\`\n` +
-      `🎯 *Take Profit:* \`${escapeMarkdown(takeProfit)}\` \(${escapeMarkdown(String(tpPct))}%\)\n` +
-      `🛑 *Stop Loss:* \`${escapeMarkdown(stopLoss)}\` \(${escapeMarkdown(String(slPct))}%\)\n` +
-      `📊 *Placar Geral:* ${escapeMarkdown(String(wins))}W \- ${escapeMarkdown(String(losses))}L \(${escapeMarkdown(String(winRate))}%\)\n` +
+      `🎯 *Take Profit:* \`${escapeMarkdown(takeProfit)}\` \\(${escapeMarkdown(String(tpPct))}%\\)\n` +
+      `🛑 *Stop Loss:* \`${escapeMarkdown(stopLoss)}\` \\(${escapeMarkdown(String(slPct))}%\\)\n` +
+      `📊 *Placar Geral:* ${escapeMarkdown(String(wins))}W \\- ${escapeMarkdown(String(losses))}L \\(${escapeMarkdown(String(winRate))}%\\)\n` +
       `🔗 [Operar na Bitget](${bitgetLink})\n`
   };
 };
 
 const translateBitgetError = (message = '') => {
   let motivoErro = message;
+
   if (motivoErro.includes('insufficient balance') || motivoErro.includes('balance')) {
     motivoErro = 'Saldo insuficiente para abrir esta operação.';
   } else if (motivoErro.includes('size')) {
     motivoErro = 'O valor da entrada é menor que o mínimo permitido pela corretora.';
   }
+
   return motivoErro;
+};
+
+const safeSendMarkdown = async (chatId, message, label = 'Telegram') => {
+  try {
+    await sendTelegramMarkdown(chatId, message);
+  } catch (error) {
+    console.error(`[BOT] Falha ao enviar mensagem Markdown (${label}):`, error.message);
+  }
+};
+
+const safeSendPlain = async (chatId, message, label = 'Telegram') => {
+  try {
+    await sendTelegramPlain(chatId, message);
+  } catch (error) {
+    console.error(`[BOT] Falha ao enviar mensagem texto puro (${label}):`, error.message);
+  }
 };
 
 const handleSignal = async (body) => {
@@ -253,15 +320,22 @@ const handleSignal = async (body) => {
   try {
     const { action, price, stopLoss, takeProfit } = body;
     symbol = getPayloadSymbol(body);
+
     if (!action || !symbol || !price || !stopLoss || !takeProfit) return;
 
-    const tipo = action === 'buy' ? 'COMPRA \(LONG\)' : 'VENDA \(SHORT\)';
+    const tipo = action === 'buy' ? 'COMPRA \\(LONG\\)' : 'VENDA \\(SHORT\\)';
     const emoji = action === 'buy' ? '🟢' : '🔴';
     const built = buildSignalDetails(body);
     signalDetails = built.details;
 
-    const vipMsg = `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal gerado por IA_`;
-    await sendTelegram(telegramChatId, vipMsg);
+    const vipMsg =
+      `${emoji} *SINAL DE ${tipo}*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `${signalDetails}` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `_Sinal gerado por IA_`;
+
+    await safeSendMarkdown(telegramChatId, vipMsg, 'VIP');
 
     const openPosition = await getOpenPositionData(symbol);
     const newHoldSide = action === 'buy' ? 'long' : 'short';
@@ -270,13 +344,24 @@ const handleSignal = async (body) => {
       const currentHoldSide = openPosition.holdSide;
 
       if (currentHoldSide === newHoldSide) {
-        const adminMsg = `⚠️ *SINAL IGNORADO \(POSIÇÃO DUPLICADA\)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção\._`;
-        await sendTelegram(telegramAdminChatId, adminMsg);
+        const adminMsg =
+          `⚠️ *SINAL IGNORADO \\(POSIÇÃO DUPLICADA\\)*\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `${signalDetails}` +
+          `━━━━━━━━━━━━━━━━━━━━\n` +
+          `_Motivo: Já existe operação na mesma direção\\._`;
+
+        await safeSendMarkdown(telegramAdminChatId, adminMsg, 'Admin duplicada');
         return;
       }
 
-      const adminMsgReversao = `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${escapeMarkdown(symbol)}\n🔁 *Fechando posição anterior* para abrir nova posição em *${escapeMarkdown(getTradeDir(body))}*\.`;
-      await sendTelegram(telegramAdminChatId, adminMsgReversao);
+      const adminMsgReversao =
+        `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
+        `🔁 *Fechando posição anterior* para abrir nova posição em *${escapeMarkdown(getTradeDir(body))}*\\.`;
+
+      await safeSendMarkdown(telegramAdminChatId, adminMsgReversao, 'Admin reversão');
       await closePosition(symbol, currentHoldSide);
       await sleep(2000);
     }
@@ -284,14 +369,25 @@ const handleSignal = async (body) => {
     await placeOrder(symbol, action, price, stopLoss, takeProfit);
 
     if (await getOpenPositionData(symbol)) {
-      const adminMsg = `✅ *ORDEM EXECUTADA COM SUCESSO*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Status: Ordem automática protegida com TP/SL\!_`;
-      await sendTelegram(telegramAdminChatId, adminMsg);
+      const adminMsg =
+        `✅ *ORDEM EXECUTADA COM SUCESSO*\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `${signalDetails}` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `_Status: Ordem automática protegida com TP/SL\\!_`;
+
+      await safeSendMarkdown(telegramAdminChatId, adminMsg, 'Admin executada');
     }
   } catch (error) {
     const motivoErro = translateBitgetError(error.message);
-    const fallbackDetails = signalDetails || `📌 *Par:* ${escapeMarkdown(symbol || 'Desconhecido')}\n`;
-    const adminMsg = `❌ *ERRO AO EXECUTAR ORDEM*\n━━━━━━━━━━━━━━━━━━━━\n${fallbackDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: ${escapeMarkdown(motivoErro)}_`;
-    await sendTelegram(telegramAdminChatId, adminMsg);
+    const plainMsg =
+      `❌ ERRO AO EXECUTAR ORDEM\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Par: ${symbol || 'Desconhecido'}\n` +
+      `Motivo: ${motivoErro}\n` +
+      `━━━━━━━━━━━━━━━━━━━━`;
+
+    await safeSendPlain(telegramAdminChatId, plainMsg, 'Admin erro');
   }
 };
 
@@ -321,7 +417,8 @@ const handleCloseAlert = async (body) => {
     }
   }
 
-  const exitMsg = `${resultIcon}\n━━━━━━━━━━━━━━━━━━━━\n` +
+  const exitMsg =
+    `${resultIcon}\n━━━━━━━━━━━━━━━━━━━━\n` +
     `📌 *Par:* ${pair}\n` +
     `⏱ *Timeframe:* ${timeframe}\n` +
     `🔄 *Operação:* ${tradeDir}\n` +
@@ -333,12 +430,17 @@ const handleCloseAlert = async (body) => {
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `${placarEscaped}`;
 
-  await sendTelegram(telegramChatId, exitMsg);
-  await sendTelegram(telegramAdminChatId, exitMsg);
+  await safeSendMarkdown(telegramChatId, exitMsg, 'VIP fechamento');
+  await safeSendMarkdown(telegramAdminChatId, exitMsg, 'Admin fechamento');
 
   if (body.reversal_info) {
-    const reversalAdmin = `🔄 *FECHAMENTO POR REVERSÃO*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${pair}\nℹ️ ${escapeMarkdown(String(body.reversal_info))}`;
-    await sendTelegram(telegramAdminChatId, reversalAdmin);
+    const reversalAdmin =
+      `🔄 *FECHAMENTO POR REVERSÃO*\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `📌 *Par:* ${pair}\n` +
+      `ℹ️ ${escapeMarkdown(String(body.reversal_info))}`;
+
+    await safeSendMarkdown(telegramAdminChatId, reversalAdmin, 'Admin fechamento reversão');
   }
 };
 
@@ -350,7 +452,9 @@ const handleVipReversalAlert = async (body) => {
   const entryTime = escapeMarkdown(String(getEntryTime(body)));
   const customMessage = escapeMarkdown(String(body.message || 'Reversão confirmada.'));
 
-  const vipReversalMsg = `🚨 *ALERTA DE REVERSÃO VIP*\n━━━━━━━━━━━━━━━━━━━━\n` +
+  const vipReversalMsg =
+    `🚨 *ALERTA DE REVERSÃO VIP*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
     `📌 *Par:* ${pair}\n` +
     `⏱ *Timeframe:* ${timeframe}\n` +
     `📤 *Posição Anterior:* ${oldPosition}\n` +
@@ -358,8 +462,8 @@ const handleVipReversalAlert = async (body) => {
     `🕒 *Horário:* ${entryTime}\n\n` +
     `${customMessage}`;
 
-  await sendTelegram(telegramChatId, vipReversalMsg);
-  await sendTelegram(telegramAdminChatId, vipReversalMsg);
+  await safeSendMarkdown(telegramChatId, vipReversalMsg, 'VIP reversão');
+  await safeSendMarkdown(telegramAdminChatId, vipReversalMsg, 'Admin reversão VIP');
 };
 
 app.post('/webhook-bot', async (req, res) => {
