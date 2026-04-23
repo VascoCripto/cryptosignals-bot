@@ -42,27 +42,31 @@ const escapeMarkdown = (text = '') => String(text)
   .replace(/!/g, '\\!');
 
 const sendTelegramMarkdown = async (chatId, text) => {
-  try {
-    await bot.sendMessage(chatId, text, {
-      parse_mode: 'MarkdownV2',
-      disable_web_page_preview: true
-    });
-  } catch (error) {
-    const errorInfo = error?.response?.body || error?.response?.data || error.message;
-    console.error('[BOT] Erro ao enviar Telegram Markdown:', errorInfo);
-    throw error;
-  }
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'MarkdownV2',
+    disable_web_page_preview: true
+  });
 };
 
 const sendTelegramPlain = async (chatId, text) => {
+  await bot.sendMessage(chatId, text, {
+    disable_web_page_preview: true
+  });
+};
+
+const safeSendMarkdown = async (chatId, message) => {
   try {
-    await bot.sendMessage(chatId, text, {
-      disable_web_page_preview: true
-    });
+    await sendTelegramMarkdown(chatId, message);
   } catch (error) {
-    const errorInfo = error?.response?.body || error?.response?.data || error.message;
-    console.error('[BOT] Erro ao enviar Telegram texto puro:', errorInfo);
-    throw error;
+    console.error('[BOT] Falha ao enviar Telegram Markdown:', error.message);
+  }
+};
+
+const safeSendPlain = async (chatId, message) => {
+  try {
+    await sendTelegramPlain(chatId, message);
+  } catch (error) {
+    console.error('[BOT] Falha ao enviar Telegram texto puro:', error.message);
   }
 };
 
@@ -78,16 +82,12 @@ const getTradeDir = (body) =>
   body.tradeDir ||
   body.trade_dir ||
   (body.action === 'buy' ? 'LONG' : body.action === 'sell' ? 'SHORT' : 'N/D');
+
 const getEntryTime = (body) => body.entryTime || body.entry_time || '-';
 const getExitTime = (body) => body.exitTime || body.exit_time || '-';
 
 const getLeverageForSymbol = (symbol) => {
-  if (
-    symbol.includes('XRP') ||
-    symbol.includes('ADA') ||
-    symbol.includes('DOGE') ||
-    symbol.includes('ICP')
-  ) return 5;
+  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP')) return 5;
   return 10;
 };
 
@@ -111,7 +111,12 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
       'locale': 'en-US'
     };
 
-    const config = { method, url: `${bitgetApiUrl}${requestPath}`, headers };
+    const config = {
+      method,
+      url: `${bitgetApiUrl}${requestPath}`,
+      headers
+    };
+
     if (method !== 'GET') config.data = body;
 
     const response = await axios(config);
@@ -121,7 +126,7 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
       ? JSON.stringify(error.response.data)
       : error.message;
 
-    console.error('[BOT] Erro na requisição Bitget API:', errorDetails);
+    console.error('[BOT] Erro Bitget API:', errorDetails);
     throw new Error(errorDetails);
   }
 };
@@ -136,9 +141,7 @@ const getAvailableBalance = async () => {
     if (response && response.data) {
       const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
       if (accountData && accountData.available !== undefined) {
-        const saldo = parseFloat(accountData.available);
-        console.log(`[BOT] Saldo livre lido com sucesso: ${saldo} USDT`);
-        return saldo;
+        return parseFloat(accountData.available);
       }
     }
 
@@ -169,17 +172,43 @@ const getOpenPositionData = async (symbol) => {
   }
 };
 
+const getMarkPrice = async (symbol) => {
+  try {
+    const response = await bitgetRequest(
+      'GET',
+      `/api/v2/mix/market/ticker?symbol=${symbol}&productType=USDT-FUTURES`
+    );
+
+    const ticker = Array.isArray(response?.data) ? response.data[0] : response?.data;
+    const candidates = [
+      ticker?.markPrice,
+      ticker?.mark_price,
+      ticker?.lastPr,
+      ticker?.last,
+      ticker?.price
+    ];
+
+    for (const value of candidates) {
+      const num = Number(value);
+      if (Number.isFinite(num) && num > 0) return num;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[BOT] Erro ao buscar mark price:', error.message);
+    return null;
+  }
+};
+
 const setLeverage = async (symbol, leverage, holdSide) => {
   try {
-    const levData = {
+    await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', {
       symbol,
       productType: 'USDT-FUTURES',
       marginCoin: 'USDT',
       leverage: leverage.toString(),
       holdSide
-    };
-
-    await bitgetRequest('POST', '/api/v2/mix/account/set-leverage', levData);
+    });
   } catch (error) {
     console.log(`[BOT] Aviso ao ajustar alavancagem: ${error.message}`);
   }
@@ -187,21 +216,68 @@ const setLeverage = async (symbol, leverage, holdSide) => {
 
 const closePosition = async (symbol, holdSide) => {
   try {
-    const orderData = {
+    await bitgetRequest('POST', '/api/v2/mix/order/close-positions', {
       symbol,
       productType: 'USDT-FUTURES',
       marginCoin: 'USDT',
       holdSide
-    };
-
-    await bitgetRequest('POST', '/api/v2/mix/order/close-positions', orderData);
-    console.log(`[BOT] Posição de ${symbol} (${holdSide}) fechada com sucesso.`);
+    });
+    console.log(`[BOT] Posição ${symbol} (${holdSide}) fechada.`);
   } catch (error) {
     throw new Error(`Falha ao fechar posição: ${error.message}`);
   }
 };
 
-const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
+const validateNumeric = (value, label) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    throw new Error(`${label} inválido: ${value}`);
+  }
+  return num;
+};
+
+const adjustTpslToSafeSide = (action, entryPrice, stopLoss, takeProfit, markPrice) => {
+  const entry = validateNumeric(entryPrice, 'Preço de entrada');
+  let sl = validateNumeric(stopLoss, 'Stop loss');
+  let tp = validateNumeric(takeProfit, 'Take profit');
+  const mark = Number(markPrice);
+
+  if (action === 'buy') {
+    if (sl >= entry) sl = entry * 0.995;
+    if (tp <= entry) tp = entry * 1.005;
+    if (Number.isFinite(mark) && sl >= mark) sl = mark * 0.995;
+    if (Number.isFinite(mark) && tp <= mark) tp = Math.max(tp, mark * 1.005);
+  } else {
+    if (sl <= entry) sl = entry * 1.005;
+    if (tp >= entry) tp = entry * 0.995;
+    if (Number.isFinite(mark) && sl <= mark) sl = mark * 1.005;
+    if (Number.isFinite(mark) && tp >= mark) tp = Math.min(tp, mark * 0.995);
+  }
+
+  if (action === 'buy' && !(sl < entry && tp > entry)) {
+    throw new Error('Não foi possível ajustar SL/TP de forma segura para LONG.');
+  }
+
+  if (action === 'sell' && !(sl > entry && tp < entry)) {
+    throw new Error('Não foi possível ajustar SL/TP de forma segura para SHORT.');
+  }
+
+  if (Number.isFinite(mark)) {
+    if (action === 'buy' && !(sl < mark)) {
+      throw new Error('Stop loss para LONG continua inválido em relação ao mark price.');
+    }
+    if (action === 'sell' && !(sl > mark)) {
+      throw new Error('Stop loss para SHORT continua inválido em relação ao mark price.');
+    }
+  }
+
+  return {
+    stopLoss: Number(sl.toFixed(6)),
+    takeProfit: Number(tp.toFixed(6))
+  };
+};
+
+const placeEntryOrder = async (symbol, action, price) => {
   const side = action === 'buy' ? 'buy' : 'sell';
   const holdSide = action === 'buy' ? 'long' : 'short';
   const leverage = getLeverageForSymbol(symbol);
@@ -214,13 +290,10 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
 
   if (symbol.includes('BTC')) size = size.toFixed(3);
   else if (symbol.includes('ETH')) size = size.toFixed(2);
-  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) {
-    size = Math.floor(size).toString();
-  } else {
-    size = size.toFixed(1);
-  }
+  else if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE')) size = Math.floor(size).toString();
+  else size = size.toFixed(1);
 
-  const orderData = {
+  await bitgetRequest('POST', '/api/v2/mix/order/place-order', {
     symbol,
     productType: 'USDT-FUTURES',
     marginMode: 'isolated',
@@ -231,12 +304,13 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
     orderType: 'market',
     holdSide,
     tradeSide: 'open'
-  };
+  });
 
-  await bitgetRequest('POST', '/api/v2/mix/order/place-order', orderData);
-  await sleep(2000);
+  return { holdSide, leverage, size: size.toString() };
+};
 
-  const posTpslData = {
+const placePositionTpsl = async (symbol, holdSide, stopLoss, takeProfit) => {
+  return bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', {
     symbol,
     productType: 'USDT-FUTURES',
     marginCoin: 'USDT',
@@ -245,9 +319,40 @@ const placeOrder = async (symbol, action, price, stopLoss, takeProfit) => {
     stopSurplusTriggerType: 'mark_price',
     stopLossTriggerPrice: String(stopLoss),
     stopLossTriggerType: 'mark_price'
-  };
+  });
+};
 
-  await bitgetRequest('POST', '/api/v2/mix/order/place-pos-tpsl', posTpslData);
+const ensureProtectedPosition = async ({ symbol, action, price, stopLoss, takeProfit, holdSide }) => {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await sleep(attempt === 1 ? 1500 : 2500);
+
+      const markPrice = await getMarkPrice(symbol);
+      const adjusted = adjustTpslToSafeSide(action, price, stopLoss, takeProfit, markPrice);
+
+      await placePositionTpsl(symbol, holdSide, adjusted.stopLoss, adjusted.takeProfit);
+
+      await sleep(1200);
+
+      return {
+        ok: true,
+        stopLoss: adjusted.stopLoss,
+        takeProfit: adjusted.takeProfit,
+        markPrice
+      };
+    } catch (error) {
+      lastError = error;
+      console.error(`[BOT] Tentativa ${attempt} de TP/SL falhou:`, error.message);
+      await sleep(1000);
+    }
+  }
+
+  return {
+    ok: false,
+    error: lastError
+  };
 };
 
 const buildSignalDetails = (body) => {
@@ -270,7 +375,6 @@ const buildSignalDetails = (body) => {
     symbol,
     leverage,
     tradeDir,
-    bitgetLink,
     details:
       `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
       `⏱ *Timeframe:* ${escapeMarkdown(String(timeframe))}\n` +
@@ -292,25 +396,13 @@ const translateBitgetError = (message = '') => {
     motivoErro = 'Saldo insuficiente para abrir esta operação.';
   } else if (motivoErro.includes('size')) {
     motivoErro = 'O valor da entrada é menor que o mínimo permitido pela corretora.';
+  } else if (motivoErro.includes('40917') || motivoErro.includes('Stop price for long positions please < mark price')) {
+    motivoErro = 'Stop loss inválido para LONG: ele precisa estar abaixo do preço de marca.';
+  } else if (motivoErro.includes('Stop price for short positions please > mark price')) {
+    motivoErro = 'Stop loss inválido para SHORT: ele precisa estar acima do preço de marca.';
   }
 
   return motivoErro;
-};
-
-const safeSendMarkdown = async (chatId, message, label = 'Telegram') => {
-  try {
-    await sendTelegramMarkdown(chatId, message);
-  } catch (error) {
-    console.error(`[BOT] Falha ao enviar mensagem Markdown (${label}):`, error.message);
-  }
-};
-
-const safeSendPlain = async (chatId, message, label = 'Telegram') => {
-  try {
-    await sendTelegramPlain(chatId, message);
-  } catch (error) {
-    console.error(`[BOT] Falha ao enviar mensagem texto puro (${label}):`, error.message);
-  }
 };
 
 const handleSignal = async (body) => {
@@ -329,13 +421,9 @@ const handleSignal = async (body) => {
     signalDetails = built.details;
 
     const vipMsg =
-      `${emoji} *SINAL DE ${tipo}*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `${signalDetails}` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `_Sinal gerado por IA_`;
+      `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal gerado por IA_`;
 
-    await safeSendMarkdown(telegramChatId, vipMsg, 'VIP');
+    await safeSendMarkdown(telegramChatId, vipMsg);
 
     const openPosition = await getOpenPositionData(symbol);
     const newHoldSide = action === 'buy' ? 'long' : 'short';
@@ -345,39 +433,65 @@ const handleSignal = async (body) => {
 
       if (currentHoldSide === newHoldSide) {
         const adminMsg =
-          `⚠️ *SINAL IGNORADO \\(POSIÇÃO DUPLICADA\\)*\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `${signalDetails}` +
-          `━━━━━━━━━━━━━━━━━━━━\n` +
-          `_Motivo: Já existe operação na mesma direção\\._`;
+          `⚠️ *SINAL IGNORADO \\(POSIÇÃO DUPLICADA\\)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção\\._`;
 
-        await safeSendMarkdown(telegramAdminChatId, adminMsg, 'Admin duplicada');
+        await safeSendMarkdown(telegramAdminChatId, adminMsg);
         return;
       }
 
       const adminMsgReversao =
-        `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n` +
         `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
         `🔁 *Fechando posição anterior* para abrir nova posição em *${escapeMarkdown(getTradeDir(body))}*\\.`;
 
-      await safeSendMarkdown(telegramAdminChatId, adminMsgReversao, 'Admin reversão');
+      await safeSendMarkdown(telegramAdminChatId, adminMsgReversao);
       await closePosition(symbol, currentHoldSide);
-      await sleep(2000);
+      await sleep(2500);
     }
 
-    await placeOrder(symbol, action, price, stopLoss, takeProfit);
+    validateNumeric(price, 'Preço');
+    validateNumeric(stopLoss, 'Stop Loss');
+    validateNumeric(takeProfit, 'Take Profit');
 
-    if (await getOpenPositionData(symbol)) {
-      const adminMsg =
-        `✅ *ORDEM EXECUTADA COM SUCESSO*\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `${signalDetails}` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `_Status: Ordem automática protegida com TP/SL\\!_`;
+    const entryResult = await placeEntryOrder(symbol, action, price);
+    await sleep(2000);
 
-      await safeSendMarkdown(telegramAdminChatId, adminMsg, 'Admin executada');
+    const confirmedPosition = await getOpenPositionData(symbol);
+    if (!confirmedPosition) {
+      throw new Error('A ordem foi enviada, mas a posição não pôde ser confirmada na Bitget.');
     }
+
+    const protection = await ensureProtectedPosition({
+      symbol,
+      action,
+      price,
+      stopLoss,
+      takeProfit,
+      holdSide: entryResult.holdSide
+    });
+
+    if (!protection.ok) {
+      await safeSendPlain(
+        telegramAdminChatId,
+        `⚠️ PROTEÇÃO NÃO CONFIRMADA EM ${symbol}. Fechamento emergencial acionado.`
+      );
+
+      await closePosition(symbol, entryResult.holdSide);
+      await sleep(1500);
+
+      throw new Error(`Falha crítica ao configurar TP/SL. Posição encerrada por segurança. Detalhe: ${protection.error?.message || 'Erro desconhecido'}`);
+    }
+
+    const adminMsg =
+      `✅ *ORDEM EXECUTADA E PROTEGIDA*\n━━━━━━━━━━━━━━━━━━━━\n` +
+      `${signalDetails}` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🛡 *Proteção confirmada*\n` +
+      `🎯 *TP ativo:* \`${escapeMarkdown(formatNumber(protection.takeProfit, 6))}\`\n` +
+      `🛑 *SL ativo:* \`${escapeMarkdown(formatNumber(protection.stopLoss, 6))}\`\n` +
+      `_Status: Ordem automática protegida com redundância\\._`;
+
+    await safeSendMarkdown(telegramAdminChatId, adminMsg);
   } catch (error) {
     const motivoErro = translateBitgetError(error.message);
     const plainMsg =
@@ -387,7 +501,7 @@ const handleSignal = async (body) => {
       `Motivo: ${motivoErro}\n` +
       `━━━━━━━━━━━━━━━━━━━━`;
 
-    await safeSendPlain(telegramAdminChatId, plainMsg, 'Admin erro');
+    await safeSendPlain(telegramAdminChatId, plainMsg);
   }
 };
 
@@ -430,17 +544,14 @@ const handleCloseAlert = async (body) => {
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `${placarEscaped}`;
 
-  await safeSendMarkdown(telegramChatId, exitMsg, 'VIP fechamento');
-  await safeSendMarkdown(telegramAdminChatId, exitMsg, 'Admin fechamento');
+  await safeSendMarkdown(telegramChatId, exitMsg);
+  await safeSendMarkdown(telegramAdminChatId, exitMsg);
 
   if (body.reversal_info) {
     const reversalAdmin =
-      `🔄 *FECHAMENTO POR REVERSÃO*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📌 *Par:* ${pair}\n` +
-      `ℹ️ ${escapeMarkdown(String(body.reversal_info))}`;
+      `🔄 *FECHAMENTO POR REVERSÃO*\n━━━━━━━━━━━━━━━━━━━━\n📌 *Par:* ${pair}\nℹ️ ${escapeMarkdown(String(body.reversal_info))}`;
 
-    await safeSendMarkdown(telegramAdminChatId, reversalAdmin, 'Admin fechamento reversão');
+    await safeSendMarkdown(telegramAdminChatId, reversalAdmin);
   }
 };
 
@@ -453,8 +564,7 @@ const handleVipReversalAlert = async (body) => {
   const customMessage = escapeMarkdown(String(body.message || 'Reversão confirmada.'));
 
   const vipReversalMsg =
-    `🚨 *ALERTA DE REVERSÃO VIP*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `🚨 *ALERTA DE REVERSÃO VIP*\n━━━━━━━━━━━━━━━━━━━━\n` +
     `📌 *Par:* ${pair}\n` +
     `⏱ *Timeframe:* ${timeframe}\n` +
     `📤 *Posição Anterior:* ${oldPosition}\n` +
@@ -462,8 +572,8 @@ const handleVipReversalAlert = async (body) => {
     `🕒 *Horário:* ${entryTime}\n\n` +
     `${customMessage}`;
 
-  await safeSendMarkdown(telegramChatId, vipReversalMsg, 'VIP reversão');
-  await safeSendMarkdown(telegramAdminChatId, vipReversalMsg, 'Admin reversão VIP');
+  await safeSendMarkdown(telegramChatId, vipReversalMsg);
+  await safeSendMarkdown(telegramAdminChatId, vipReversalMsg);
 };
 
 app.post('/webhook-bot', async (req, res) => {
