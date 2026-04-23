@@ -18,10 +18,10 @@ const bitgetApiSecret = process.env.BITGET_API_SECRET;
 const bitgetApiPassphrase = process.env.BITGET_PASSPHRASE;
 const bitgetApiUrl = 'https://api.bitget.com';
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 const PRODUCT_TYPE = 'USDT-FUTURES';
 const MARGIN_COIN = 'USDT';
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const escapeMarkdown = (text = '') => String(text)
   .replace(/\\/g, '\\\\')
@@ -89,7 +89,13 @@ const getEntryTime = (body) => body.entryTime || body.entry_time || '-';
 const getExitTime = (body) => body.exitTime || body.exit_time || '-';
 
 const getLeverageForSymbol = (symbol) => {
-  if (symbol.includes('XRP') || symbol.includes('ADA') || symbol.includes('DOGE') || symbol.includes('ICP') || symbol.includes('TRX')) return 5;
+  if (
+    symbol.includes('XRP') ||
+    symbol.includes('ADA') ||
+    symbol.includes('DOGE') ||
+    symbol.includes('ICP') ||
+    symbol.includes('TRX')
+  ) return 5;
   return 10;
 };
 
@@ -110,7 +116,7 @@ const bitgetRequest = async (method, requestPath, data = {}) => {
       'ACCESS-TIMESTAMP': timestamp,
       'ACCESS-SIGN': signature,
       'ACCESS-PASSPHRASE': bitgetApiPassphrase,
-      'locale': 'en-US'
+      locale: 'en-US'
     };
 
     const config = {
@@ -255,6 +261,7 @@ const getSymbolRuntimeConfig = async (symbol) => {
 };
 
 const normalizePrice = (value, decimals) => roundNearest(value, decimals);
+
 const normalizeTrigger = (value, decimals, direction = 'nearest') => {
   if (direction === 'down') return roundDown(value, decimals);
   if (direction === 'up') return roundUp(value, decimals);
@@ -560,6 +567,33 @@ const ensureProtectedPosition = async ({ symbol, action, entryPrice, stopLoss, t
   return { ok: false, error: lastError };
 };
 
+const buildVipReversalUrgentMessage = (body, currentHoldSide) => {
+  const symbol = getPayloadSymbol(body);
+  const pair = escapeMarkdown(symbol);
+  const timeframe = escapeMarkdown(String(body.timeframe || '-'));
+  const oldSide = currentHoldSide === 'long' ? 'LONG' : 'SHORT';
+  const newSide = body.action === 'buy' ? 'LONG' : 'SHORT';
+  const entryTime = escapeMarkdown(String(getEntryTime(body)));
+  const entryPrice = escapeMarkdown(formatNumber(body.price, 6));
+  const tp = escapeMarkdown(formatNumber(body.takeProfit, 6));
+  const sl = escapeMarkdown(formatNumber(body.stopLoss, 6));
+
+  return (
+    `🚨 *REVERSÃO DE TENDÊNCIA \\- AÇÃO IMEDIATA*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📌 *Par:* ${pair}\n` +
+    `⏱ *Timeframe:* ${timeframe}\n` +
+    `📤 *Posição Anterior:* ${escapeMarkdown(oldSide)}\n` +
+    `📥 *Nova Direção:* *${escapeMarkdown(newSide)}*\n` +
+    `🕒 *Horário:* ${entryTime}\n\n` +
+    `⚠️ *ATENÇÃO:* Este alerta *não é um sinal comum*\\.\n` +
+    `⚠️ *Feche imediatamente* a posição anterior e *abra no sentido contrário* sem demora\\.\n\n` +
+    `💰 *Entrada:* \`${entryPrice}\`\n` +
+    `🎯 *Take Profit:* \`${tp}\`\n` +
+    `🛑 *Stop Loss:* \`${sl}\`\n`
+  );
+};
+
 const handleSignal = async (body) => {
   let signalDetails = '';
   let symbol = '';
@@ -575,11 +609,6 @@ const handleSignal = async (body) => {
     const built = buildSignalDetails(body);
     signalDetails = built.details;
 
-    const vipMsg =
-      `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal automatizado_`;
-
-    await safeSendMarkdown(telegramChatId, vipMsg);
-
     const openPosition = await getOpenPositionData(symbol);
     const newHoldSide = action === 'buy' ? 'long' : 'short';
 
@@ -587,21 +616,36 @@ const handleSignal = async (body) => {
       const currentHoldSide = openPosition.holdSide;
 
       if (currentHoldSide === newHoldSide) {
+        const vipMsg =
+          `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal automatizado_`;
+        await safeSendMarkdown(telegramChatId, vipMsg);
+
         const adminMsg =
           `⚠️ *SINAL IGNORADO \\(POSIÇÃO DUPLICADA\\)*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Motivo: Já existe operação na mesma direção\\._`;
+
         await safeSendMarkdown(telegramAdminChatId, adminMsg);
         return;
       }
 
+      const vipReversalUrgentMsg = buildVipReversalUrgentMessage(body, currentHoldSide);
       const adminMsgReversao =
         `🔄 *REVERSÃO DE TENDÊNCIA DETECTADA*\n━━━━━━━━━━━━━━━━━━━━\n` +
         `📌 *Par:* ${escapeMarkdown(symbol)}\n` +
-        `🔁 *Fechando posição anterior* para abrir nova posição em *${escapeMarkdown(getTradeDir(body))}*\\.`;
+        `📤 *Posição Anterior:* ${escapeMarkdown(currentHoldSide === 'long' ? 'LONG' : 'SHORT')}\n` +
+        `📥 *Nova Direção:* *${escapeMarkdown(action === 'buy' ? 'LONG' : 'SHORT')}*\n` +
+        `🔁 *Fechando posição anterior* para abrir nova posição automaticamente\\.\n`;
 
+      await safeSendMarkdown(telegramChatId, vipReversalUrgentMsg);
       await safeSendMarkdown(telegramAdminChatId, adminMsgReversao);
+
       await closePosition(symbol, currentHoldSide);
       await sleep(2500);
     }
+
+    const vipMsg =
+      `${emoji} *SINAL DE ${tipo}*\n━━━━━━━━━━━━━━━━━━━━\n${signalDetails}━━━━━━━━━━━━━━━━━━━━\n_Sinal automatizado_`;
+
+    await safeSendMarkdown(telegramChatId, vipMsg);
 
     validateNumeric(price, 'Preço');
     validateNumeric(stopLoss, 'Stop Loss');
